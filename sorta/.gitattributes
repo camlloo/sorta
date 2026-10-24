@@ -1,0 +1,5 @@
+# 测试 fixture 中的二进制文件不做换行符转换
+*.png binary
+*.pdf binary
+*.docx binary
+*.db binary

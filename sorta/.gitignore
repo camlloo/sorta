@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+
+# 测试与工具缓存
+.pytest_cache/
+.ruff_cache/
+
+# 本地配置与数据库（绝不提交真实密钥，见开发文档 §12.2）
+.env
+*.db
+
+# IDE
+.idea/
+.vscode/

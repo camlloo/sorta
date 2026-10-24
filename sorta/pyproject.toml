@@ -1,0 +1,39 @@
+[project]
+name = "sorta"
+version = "0.1.0"
+description = "SORTA — 本地优先、自然语言驱动的 AI 文件整理助手（M1：只读扫描与注册）"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "pypdf>=4.0",
+    "python-docx>=1.1",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+sorta = "sorta.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["sorta"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
