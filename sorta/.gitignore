@@ -14,6 +14,9 @@ build/
 .env
 *.db
 
+# plan 命令的本地生成输出（可能包含真实目录的文件路径，不提交）
+plan.json
+
 # IDE
 .idea/
 .vscode/
