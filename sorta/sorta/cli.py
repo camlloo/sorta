@@ -187,8 +187,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
         plan_hash = compute_plan_hash(plan)
         plan_id = store.save_plan(plan.model_dump(mode="json"), plan_hash, status="draft")
     except Exception as exc:  # 持久化失败不应吞掉已生成的计划
-        print(f"\n警告: 计划落库失败（{type(exc).__name__}: {exc}），"
-              f"apply 将无法跨进程执行该计划")
+        print(f"\n警告: 计划落库失败（{type(exc).__name__}: {exc}），apply 将无法跨进程执行该计划")
         plan_id = None
 
     if args.output:
@@ -341,6 +340,19 @@ def _cmd_undo(args: argparse.Namespace) -> int:
     return 0 if result.status == "undone" else 1
 
 
+def _cmd_ui(args: argparse.Namespace) -> int:
+    """启动 Streamlit 图形界面（M4）。"""
+    import subprocess
+    import sys
+
+    app_path = Path(__file__).resolve().parent / "ui" / "app.py"
+    cmd = [sys.executable, "-m", "streamlit", "run", str(app_path)]
+    if args.headless:
+        cmd += ["--server.headless", "true"]
+    print("启动图形界面…（Ctrl+C 退出）")
+    return subprocess.call(cmd)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sorta", description="SORTA — AI 智能文件整理助手")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -374,6 +386,10 @@ def main(argv: list[str] | None = None) -> int:
     p_undo = sub.add_parser("undo", help="撤销一个执行批次（无冲突时尽力恢复）")
     p_undo.add_argument("execution_id", help="执行批次 ID（见 history）")
     p_undo.set_defaults(func=_cmd_undo)
+
+    p_ui = sub.add_parser("ui", help="启动 Streamlit 图形界面")
+    p_ui.add_argument("--headless", action="store_true", help="不自动打开浏览器")
+    p_ui.set_defaults(func=_cmd_ui)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -3,7 +3,7 @@
 > 本地优先、自然语言驱动、可预览、可撤销的 AI 文件整理助手。
 > 完整规格见 [`SORTA_开发文档.md`](../SORTA_开发文档.md)（下称"开发文档"）。
 
-## 当前状态：M1 + M2 + M3（完整核心闭环）
+## 当前状态：M1 + M2 + M3 + M4（CLI 与图形界面双入口，核心闭环完整）
 
 M1 文件系统层（详见下方模块说明）；M2 Agent 只读调查与计划生成（不使用任何
 Agent 框架，Tool Calling 循环手写于 `agent/controller.py`）；M3 安全执行与撤销。
@@ -27,7 +27,18 @@ M3 已交付（开发文档 §7/§8/§9）：
 - `sorta/executor/undo.py` — 条件撤销：目标未被修改且原路径空闲才移回；
   copy 撤销仅删除本次创建且未改动的副本；冲突保留现场绝不覆盖（§8.3）。
 
-M4（Streamlit 界面）、M5（大规模测试集与打磨）尚未开始。
+M4 已交付（开发文档 §11.1）：
+
+- `sorta/ui/app.py` — Streamlit 图形界面（`uv run sorta ui` 启动）：侧栏工作目录与
+  隐私模式选择（含扫描预览）、自然语言需求输入、实时只读工具调用日志、
+  可编辑计划表格（勾选剔除操作 / 修改目标路径，内容变更自动重新校验）、
+  批准执行与逐项结果、历史与撤销。与 CLI 共用同一套业务模块（调查/编辑/
+  审批执行/撤销），不复制任何安全逻辑。
+- 可测试逻辑独立于 UI：`planner/editing.py`（计划编辑重建）、`executor/flows.py`
+  （approve_and_execute 共享审批执行流）、`agent/controller.py` 的
+  `on_tool_record` 回调（实时工具日志）。
+
+M5（大规模测试集与打磨）尚未开始。
 
 ## 环境要求
 
@@ -44,6 +55,7 @@ uv run sorta scan tests/fixtures/downloads    # 扫描预览（无需 API Key）
 
 # 完整闭环：计划 → 校验 → 执行 → 撤销（需要 LLM API Key）
 cp .env.example .env   # 填入 SORTA_API_KEY / SORTA_MODEL（OpenAI 兼容接口）
+uv run sorta ui                             # 图形界面（推荐，无需写命令）
 uv run sorta plan --root tests/fixtures/downloads \
   --request "把安全学习资料整理到 Security-Learning，不确定的保留原处" \
   --output plan.json

@@ -58,12 +58,14 @@ class AgentController:
         config: SortaConfig,
         llm: LLMClient,
         consent_callback: ConsentCallback | None = None,
+        on_tool_record: Any = None,
     ):
         self.registry = registry
         self.scanner = scanner
         self.config = config
         self.llm = llm
         self.consent_callback = consent_callback
+        self.on_tool_record = on_tool_record  # 每次工具调用完成后的回调（UI 实时日志用）
 
     def run(self, root: str | Path, request: str, *, model: str) -> AgentRunResult:
         """执行一次完整调查并返回计划。只读；不改任何文件。"""
@@ -103,6 +105,8 @@ class AgentController:
                 else:
                     record = dispatcher.dispatch(call.name, call.arguments)
                 messages.append(tool_message(call.id, record.result_json))
+                if self.on_tool_record is not None:
+                    self.on_tool_record(record)
             if batch_plan is not None:
                 plan = batch_plan
                 break
