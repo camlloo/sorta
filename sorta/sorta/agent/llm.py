@@ -35,12 +35,16 @@ class LLMClient(Protocol):
 
 
 class OpenAICompatClient:
-    """基于 openai SDK 的 OpenAI 兼容实现（base_url 可指向任意兼容服务商）。"""
+    """基于 openai SDK 的 OpenAI 兼容实现（base_url 可指向任意兼容服务商）。
+
+    total_usage 累计 token 用量，供评估脚本统计调用成本（§13.3）。
+    """
 
     def __init__(self, *, api_key: str, base_url: str | None = None, timeout: float = 120.0):
         from openai import OpenAI  # 延迟导入：Mock 测试无需安装/初始化 SDK
 
         self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+        self.total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "requests": 0}
 
     def chat(
         self, *, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
@@ -51,6 +55,11 @@ class OpenAICompatClient:
             tools=tools or None,
             tool_choice="auto" if tools else None,
         )
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            self.total_usage["prompt_tokens"] += getattr(usage, "prompt_tokens", 0) or 0
+            self.total_usage["completion_tokens"] += getattr(usage, "completion_tokens", 0) or 0
+        self.total_usage["requests"] += 1
         message = resp.choices[0].message
         calls = [
             ToolCall(

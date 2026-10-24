@@ -1,4 +1,4 @@
-"""共享测试工具：最小 PDF 构造器与平台能力探测。
+"""共享测试工具：最小 PDF 构造器、平台能力探测、Mock LLM 与大规模评估集。
 
 自动化测试一律基于 tmp_path 构造隔离目录（开发文档 §13.2），
 不依赖 scripts/make_test_fixture.py 生成的静态目录。
@@ -6,11 +6,54 @@
 
 from __future__ import annotations
 
+import copy
 import io
+import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+
+# ---- Mock LLM（AgentController 测试与大规模管线测试共用） --------------------
+
+
+class MockLLM:
+    """脚本化替身：响应项为 LLMResponse 或 (request) -> LLMResponse 的函数。"""
+
+    def __init__(self, script: list):
+        self.script = list(script)
+        self.requests: list[dict] = []
+
+    def chat(self, *, model, messages, tools):
+        self.requests.append({"model": model, "messages": copy.deepcopy(messages), "tools": tools})
+        if not self.script:
+            raise AssertionError("MockLLM 脚本耗尽，循环未按预期收敛")
+        item = self.script.pop(0)
+        return item(self.requests[-1]) if callable(item) else item
+
+
+def tc(name: str, args: dict | None = None, call_id: str | None = None):
+    from sorta.agent.llm import ToolCall
+
+    return ToolCall(
+        id=call_id or f"call_{name}",
+        name=name,
+        arguments=json.dumps(args or {}, ensure_ascii=False),
+    )
+
+
+def resp(*calls, content: str | None = None):
+    from sorta.agent.llm import LLMResponse
+
+    return LLMResponse(content=content, tool_calls=list(calls))
+
+
+def tool_payloads(request: dict) -> list[dict]:
+    return [json.loads(m["content"]) for m in request["messages"] if m.get("role") == "tool"]
 
 
 def pdf_escape(text: str) -> str:
