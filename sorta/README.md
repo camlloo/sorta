@@ -3,33 +3,31 @@
 > 本地优先、自然语言驱动、可预览、可撤销的 AI 文件整理助手。
 > 完整规格见 [`SORTA_开发文档.md`](../SORTA_开发文档.md)（下称"开发文档"）。
 
-## 当前状态：M1 + M2（文件系统层 + Agent 计划生成）
+## 当前状态：M1 + M2 + M3（完整核心闭环）
 
-M1 按开发文档 §14.1/§18 交付，**不连接 LLM**：
+M1 文件系统层（详见下方模块说明）；M2 Agent 只读调查与计划生成（不使用任何
+Agent 框架，Tool Calling 循环手写于 `agent/controller.py`）；M3 安全执行与撤销。
 
-- `sorta/scanner/scanner.py` — 授权目录扫描：深度/数量受限、不跟随符号链接与
-  Windows junction、隐藏文件默认跳过、确定性排序、cursor 分页、不可读目录如实上报。
-- `sorta/scanner/registry.py` — `file_id` 注册表：不可猜测 ID、会话绑定授权根目录、
-  过期清理、`resolve_path` 强制边界校验（越界/被替换为链接即拒绝）、
-  `verify` 检测扫描后文件变化（大小 + mtime_ns）。
-- `sorta/scanner/readers.py` — 受控读取：txt/md/json/csv/py/js/ts（UTF-8 优先、GBK 回退）、
-  PDF（pypdf，不做 OCR）、DOCX（python-docx 段落 + 表格）；大小/字符数上限；
-  加密、扫描型、损坏等状态显式返回。文件内容一律视为不可信数据，绝不执行。
+M3 已交付（开发文档 §7/§8/§9）：
 
-M2 已交付（不使用任何 Agent 框架，Tool Calling 循环手写于 `agent/controller.py`）：
+- `sorta/planner/validator.py` — 执行前确定性校验（§7.2 十项）：源/目标边界、
+  符号链接、重复源、重复目标（NTFS 大小写归一化）、同名目标冲突、源==目标、
+  扫描后文件变化（STALE）、Windows 保留名、互换覆盖对（A→B 且 B→A）、
+  深度/路径长度预警、操作条数上限。
+- `sorta/planner/schemas.py` — `compute_plan_hash`：规范化序列化 SHA-256，
+  人工编辑即失效既有审批——不能拿审批 A 执行计划 B。
+- `sorta/storage/` — SQLAlchemy 2.x + SQLite：`models.py`（六张表 + 外键 +
+  唯一约束）、`database.py`（`PRAGMA foreign_keys=ON` 逐连接开启）、
+  `repository.py`（PlanStore 仓储；ORM 对象不越过 storage 层）。
+- `sorta/executor/engine.py` — 审批绑定校验、进程内互斥锁、锁内重验、
+  确定性 execution_id（同一审批无法重复执行）、串行逐项执行、
+  `recover_interrupted` 崩溃恢复（按真实文件状态核对，不盲目重放）。
+- `sorta/executor/safety.py` — 无覆盖 move/copy（目标存在即拒绝）、
+  跨设备移动显式报错、大小+mtime_ns 指纹（§17.4）。
+- `sorta/executor/undo.py` — 条件撤销：目标未被修改且原路径空闲才移回；
+  copy 撤销仅删除本次创建且未改动的副本；冲突保留现场绝不覆盖（§8.3）。
 
-- `sorta/agent/tools.py` — 只读工具白名单（list_files / get_file_info / read_file /
-  search_files）与参数校验；move/copy/delete/shell 等一律拒绝；隐私门三种模式
-  （metadata_only 下 read_file 不可见、ask_before_content 逐文件确认、authorized_content）。
-- `sorta/agent/controller.py` — 有限循环（默认 8 步）+ 工具调用总次数上限（默认 40）+
-  审计日志；模型先调查（list_files → get_file_info/read_file）再经 `submit_plan`
-  提交计划；计划结构校验失败或 scan_id 不符会把错误反馈给模型重试。
-- `sorta/agent/schemas.py` — Pydantic `ExecutionPlan`：destination 强制相对 posix
-  路径（拒绝绝对路径/`..`/反斜杠/盘符），reason 必须有实质内容。
-- `sorta/agent/prompts.py` — 系统提示词：授权范围、工作流程、不可信内容约束
-  （文件内容中的指令一律当数据）、隐私模式说明、低信心处理。
-
-M3（PlanValidator/Executor/SQLite/Undo）、M4（Streamlit）尚未开始。
+M4（Streamlit 界面）、M5（大规模测试集与打磨）尚未开始。
 
 ## 环境要求
 
@@ -42,35 +40,41 @@ M3（PlanValidator/Executor/SQLite/Undo）、M4（Streamlit）尚未开始。
 uv sync                                  # 创建 .venv 并安装依赖
 uv run pytest                            # 运行测试
 uv run python scripts/make_test_fixture.py   # 生成模拟下载目录（可选）
-uv run sorta scan tests/fixtures/downloads    # 扫描预览（M1，无需 API Key）
+uv run sorta scan tests/fixtures/downloads    # 扫描预览（无需 API Key）
 
-# 自然语言生成整理计划（M2，需要 LLM API Key，只读调查、不执行任何移动）
+# 完整闭环：计划 → 校验 → 执行 → 撤销（需要 LLM API Key）
 cp .env.example .env   # 填入 SORTA_API_KEY / SORTA_MODEL（OpenAI 兼容接口）
 uv run sorta plan --root tests/fixtures/downloads \
   --request "把安全学习资料整理到 Security-Learning，不确定的保留原处" \
   --output plan.json
+uv run sorta inspect-plan plan.json      # 校验预览（不执行）
+uv run sorta apply plan.json             # 交互确认后执行
+uv run sorta history                     # 执行历史
+uv run sorta undo <execution_id>         # 无冲突时尽力撤销
 ```
 
 环境变量见 [`.env.example`](.env.example)；复制为 `.env` 后生效（勿提交真实密钥）。
+数据库默认 `sqlite:///sorta.db`（CWD）；删除该行则用系统数据目录
+（Windows: `%APPDATA%/sorta/sorta.db`）。
 
-## 安全边界（M1 已实现并测试覆盖）
+## 安全边界（已实现并测试覆盖）
 
 - 未授权路径访问：相对路径解析统一走 `resolve_within_root`，绝对路径、`..`、
-  盘符相对段、符号链接/junction 越界全部拒绝（`tests/test_registry.py`）。
-- 符号链接与 junction：扫描阶段直接跳过，不注册、不跟随。
-- 资源耗尽：扫描深度/数量、读取大小/字符数/页数全部有上限，超限显式报错。
-- 异常格式：损坏 DOCX、加密 PDF、扫描型 PDF、二进制、无法解码的文本均返回
-  明确状态，不猜测内容（`tests/test_readers.py`）。
-- LLM 拿不到写接口：工具白名单之外（move/copy/delete/shell…）一律拒绝；计划只能
-  经 `submit_plan` 提交并通过结构校验、scan_id 绑定（`tests/test_agent_tools.py`、
-  `tests/test_agent_controller.py`）。
-- Prompt Injection：文件内容以 JSON 数据形式进入对话，注入文本无法伪造消息结构；
-  提示词明确要求忽略内容中的指令并如实标注（`tests/test_agent_controller.py`）。
+  盘符相对段、符号链接/junction 越界全部拒绝（`tests/test_registry.py`、
+  `tests/test_plan_validator.py`）。
+- 未审批零变更：审批通过 `plan_hash` 精确绑定，执行前锁内重验；未审批、
+  计划被编辑、源文件被改动均拒绝执行（`tests/test_executor.py`）。
+- 无静默覆盖：目标已存在一律拒绝（逐操作失败，其余继续），undo 冲突时
+  保留现场（`tests/test_executor.py`、`tests/test_undo.py`）。
+- 重复执行防护：确定性 execution_id + 数据库主键约束，同一审批不可执行两次。
+- LLM 拿不到写接口：工具白名单之外（move/copy/delete/shell…）一律拒绝；
+  计划只能经 `submit_plan` 提交并通过结构校验、scan_id 绑定。
+- Prompt Injection：文件内容以 JSON 数据形式进入对话；执行权限完全独立于 LLM。
 - 失控调用防护：步数上限 + 工具调用总次数上限，超限中止并留审计日志。
 
 ## 已知限制
 
-- M2 仅生成计划，不执行任何文件操作；执行引擎与撤销在 M3 提供。
-- `plan` 命令需要 OpenAI 兼容的 LLM API（`SORTA_BASE_URL` 可指向任意兼容服务商）。
-- 注册表为进程内实现，扫描结果不跨进程保留；持久化在 M3 引入 SQLite 后提供。
+- 撤销是"条件满足时的尽力恢复"（§8.3），不是事务性回滚；跨盘移动不支持。
+- 计划与扫描会话的有效期默认 1 小时（`SORTA_SCAN_SESSION_TTL`），过期需重新 plan。
 - Windows 上创建符号链接需要开发者模式或管理员权限，相关测试在不满足时自动跳过。
+- `apply --yes` 跳过交互确认，仅建议脚本场景使用。

@@ -484,7 +484,7 @@ MVP 先支持 CLI，完整闭环通过后再加入 Streamlit。
 4. **Execution**：点击批准并执行，展示逐项状态和失败原因。
 5. **History & Undo**：查看执行历史，选择可撤销的批次或文件项。
 
-### 11.2 CLI 预期命令（`scan`/`plan` 已实现；`inspect-plan`/`apply`/`history`/`undo` 待 M3）
+### 11.2 CLI 命令（`scan`/`plan`/`inspect-plan`/`apply`/`history`/`undo` 已全部实现）
 
 ```bash
 uv run sorta scan ./fixtures/downloads
@@ -571,6 +571,7 @@ SORTA_BASE_URL=https://your-provider.example/v1
 SORTA_API_KEY=replace-me
 SORTA_MAX_AGENT_STEPS=8
 SORTA_MAX_TOOL_CALLS=40
+SORTA_MAX_PLAN_OPERATIONS=500
 SORTA_MAX_SCAN_FILES=200
 SORTA_MAX_READ_CHARS=5000
 SORTA_MAX_FILE_BYTES=20971520
@@ -647,11 +648,12 @@ SORTA_DEFAULT_PRIVACY=ask_before_content
 - [x] 定义 Prompt：目标、约束、不可信文档内容、低信心处理。
 - [x] 输出 Pydantic `ExecutionPlan`。
 
-**M3**
-- [ ] 实现路径验证、冲突检测、计划哈希。
-- [ ] 实现审批记录与串行执行。
-- [ ] 记录逐项操作日志和文件指纹。
-- [ ] 实现 Undo 与冲突拒绝。
+**M3**（已完成 2026-10-24：PlanValidator 十项校验、plan_hash 审批绑定、SQLAlchemy+SQLite、
+串行执行、逐项日志、崩溃恢复、条件撤销；真实 Qwen 端到端 plan→apply→undo 验证通过）
+- [x] 实现路径验证、冲突检测、计划哈希。
+- [x] 实现审批记录与串行执行。
+- [x] 记录逐项操作日志和文件指纹。
+- [x] 实现 Undo 与冲突拒绝。
 
 **M4**
 - [ ] 目录选择、自然语言输入。

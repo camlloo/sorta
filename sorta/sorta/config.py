@@ -24,6 +24,8 @@ class SortaConfig:
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES
     max_agent_steps: int = 8
     max_tool_calls: int = 40
+    max_plan_operations: int = 500
+    db_url: str | None = None  # None 时由 storage 层解析到系统数据目录
     default_privacy: str = "ask_before_content"
     include_hidden: bool = False
     scan_session_ttl_seconds: int = 3_600
@@ -63,6 +65,8 @@ class SortaConfig:
             max_file_bytes=get_int("SORTA_MAX_FILE_BYTES", cls.max_file_bytes),
             max_agent_steps=get_int("SORTA_MAX_AGENT_STEPS", cls.max_agent_steps),
             max_tool_calls=get_int("SORTA_MAX_TOOL_CALLS", cls.max_tool_calls),
+            max_plan_operations=get_int("SORTA_MAX_PLAN_OPERATIONS", cls.max_plan_operations),
+            db_url=env.get("SORTA_DB_URL") or None,
             default_privacy=privacy,
             include_hidden=get_bool("SORTA_INCLUDE_HIDDEN", cls.include_hidden),
             scan_session_ttl_seconds=get_int(

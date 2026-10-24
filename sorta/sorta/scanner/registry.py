@@ -55,6 +55,25 @@ class ScanSession:
         file_id = self._by_path.get(os.path.normcase(relative_path))
         return self.files.get(file_id) if file_id else None
 
+    @classmethod
+    def from_records(
+        cls,
+        *,
+        scan_id: str,
+        root: str | Path,
+        created_at: float,
+        expires_at: float,
+        records: list[FileRecord],
+    ) -> ScanSession:
+        """从持久化记录重建会话（M3：PlanStore.load_session 使用）。"""
+        session = cls(
+            scan_id=scan_id, root=Path(root), created_at=created_at, expires_at=expires_at
+        )
+        for record in records:
+            session.files[record.id] = record
+            session._by_path[os.path.normcase(record.relative_path)] = record.id
+        return session
+
     def upsert(
         self, *, relative_path: str, extension: str, size: int, modified_ns: int
     ) -> FileRecord:
@@ -104,6 +123,10 @@ class FileRegistry:
         )
         self._sessions[scan_id] = session
         return session
+
+    def restore_session(self, session: ScanSession) -> None:
+        """装入从持久化层重建的会话（M3：apply 跨进程恢复扫描上下文）。"""
+        self._sessions[session.scan_id] = session
 
     def get_session(self, scan_id: str, *, root: Path | None = None) -> ScanSession:
         session = self._sessions.get(scan_id)

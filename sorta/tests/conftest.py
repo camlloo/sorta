@@ -109,3 +109,93 @@ def can_junction(tmp_path_factory) -> bool:
         if isjunction(str(link)):
             return True
     return False
+
+
+# ---- M3 共享构件 -------------------------------------------------------------
+
+
+@pytest.fixture
+def m3_env(tmp_path):
+    """端到端环境：真实目录 + 内存 SQLite + 已扫描会话（plan→apply→undo 全链路共用）。"""
+    from types import SimpleNamespace
+
+    from sorta.config import SortaConfig
+    from sorta.scanner import FileRegistry, Scanner
+    from sorta.storage import PlanStore, create_db_engine, init_db
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.txt").write_text("hello", encoding="utf-8", newline="\n")
+    (root / "b.txt").write_text("world", encoding="utf-8", newline="\n")
+    (root / "sub").mkdir()
+    (root / "sub" / "c.txt").write_text("deep", encoding="utf-8", newline="\n")
+
+    config = SortaConfig()
+    engine = create_db_engine("sqlite://")
+    init_db(engine)
+    store = PlanStore(engine)
+    registry = FileRegistry(ttl_seconds=3600)
+    scanner = Scanner(registry, config)
+    page = scanner.scan(root)
+    store.save_session(registry.get_session(page.scan_id))
+    session = registry.get_session(page.scan_id)
+    return SimpleNamespace(
+        root=root,
+        config=config,
+        store=store,
+        registry=registry,
+        scanner=scanner,
+        session=session,
+        scan_id=page.scan_id,
+    )
+
+
+def make_plan(
+    session, moves, *, action="move", confidence="high", uncertain=None, summary="测试计划"
+):
+    """按 (源相对路径, 目标相对路径) 列表构造 ExecutionPlan。"""
+    from sorta.agent.schemas import ExecutionPlan
+
+    operations = []
+    for src, dst in moves:
+        record = session.find_by_path(src)
+        assert record is not None, f"源文件未注册: {src}"
+        operations.append(
+            {
+                "source_id": record.id,
+                "destination": dst,
+                "action": action,
+                "reason": "测试依据",
+                "confidence": confidence,
+            }
+        )
+    return ExecutionPlan(
+        scan_id=session.scan_id,
+        summary=summary,
+        operations=operations,
+        uncertain_files=uncertain or [],
+    )
+
+
+def approve(env, plan):
+    """走完 draft → validated → awaiting_approval → approved + 审批落库。"""
+    from sorta.planner import compute_plan_hash
+
+    plan_hash = compute_plan_hash(plan)
+    plan_id = env.store.save_plan(plan.model_dump(mode="json"), plan_hash, status="draft")
+    for status in ("validated", "awaiting_approval"):
+        env.store.update_plan_status(plan_id, status)
+    approval = env.store.save_approval(plan_id, plan_hash)
+    env.store.update_plan_status(plan_id, "approved")
+    return plan_hash, approval
+
+
+def execute_plan(env, plan, *, approval=None):
+    from sorta.executor import ExecutionEngine
+
+    if approval is None:
+        _, approval = approve(env, plan)
+    engine = ExecutionEngine(
+        registry=env.registry, scanner=env.scanner, config=env.config, store=env.store
+    )
+    return engine.execute(plan, approval_id=approval.id)
