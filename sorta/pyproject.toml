@@ -5,6 +5,7 @@ description = "SORTA — 本地优先、自然语言驱动的 AI 文件整理助
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "openai>=3.37.0",
     "pydantic>=2.7",
     "pypdf>=4.0",
     "python-docx>=1.1",

@@ -18,9 +18,9 @@ from pathlib import Path, PurePath
 from pydantic import BaseModel, Field
 
 from sorta.config import SortaConfig
-from sorta.errors import ScanError
+from sorta.errors import ScanError, ScanSessionError
 from sorta.models import FileRecord
-from sorta.scanner.registry import FileRegistry
+from sorta.scanner.registry import FileRegistry, ScanSession
 
 
 class ScanPage(BaseModel):
@@ -76,6 +76,7 @@ class Scanner:
         limit: int | None = None,
         include_hidden: bool | None = None,
         cursor: str | None = None,
+        session: ScanSession | None = None,
     ) -> ScanPage:
         cfg = self.config
         root_path = Path(root)
@@ -85,15 +86,22 @@ class Scanner:
             raise ScanError(f"根目录不是目录: {root_path}")
         root_real = Path(os.path.realpath(root_path))
 
-        last_key = ""
         if cursor is not None:
-            scan_id, _, last_key = cursor.partition("|")
-            if not scan_id or not last_key:
+            scan_id_cursor, _, last_key = cursor.partition("|")
+            if not scan_id_cursor or not last_key:
                 raise ScanError(f"cursor 格式非法: {cursor!r}")
-            session = self.registry.get_session(scan_id, root=root_real)
+            if session is not None and scan_id_cursor != session.scan_id:
+                raise ScanError("cursor 与传入会话不一致")
+            session = self.registry.get_session(scan_id_cursor, root=root_real)
+        elif session is not None:
+            # Agent 流程：会话由 controller 预先创建（§4.1 第 2 步），扫描登记进同一会话
+            if os.path.normcase(str(session.root)) != os.path.normcase(str(root_real)):
+                raise ScanSessionError(f"传入会话与根目录 {root_real} 不符")
+            last_key = ""
         else:
             session = self.registry.create_session(root_real)
-            scan_id = session.scan_id
+            last_key = ""
+        scan_id = session.scan_id
 
         depth = cfg.max_scan_depth if max_depth is None else max_depth
         page_size = cfg.max_scan_files if limit is None else limit

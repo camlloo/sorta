@@ -22,6 +22,8 @@ class SortaConfig:
     max_scan_files: int = 200
     max_read_chars: int = 5_000
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES
+    max_agent_steps: int = 8
+    max_tool_calls: int = 40
     default_privacy: str = "ask_before_content"
     include_hidden: bool = False
     scan_session_ttl_seconds: int = 3_600
@@ -59,6 +61,8 @@ class SortaConfig:
             max_scan_files=get_int("SORTA_MAX_SCAN_FILES", cls.max_scan_files),
             max_read_chars=get_int("SORTA_MAX_READ_CHARS", cls.max_read_chars),
             max_file_bytes=get_int("SORTA_MAX_FILE_BYTES", cls.max_file_bytes),
+            max_agent_steps=get_int("SORTA_MAX_AGENT_STEPS", cls.max_agent_steps),
+            max_tool_calls=get_int("SORTA_MAX_TOOL_CALLS", cls.max_tool_calls),
             default_privacy=privacy,
             include_hidden=get_bool("SORTA_INCLUDE_HIDDEN", cls.include_hidden),
             scan_session_ttl_seconds=get_int(

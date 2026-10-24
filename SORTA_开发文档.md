@@ -484,7 +484,7 @@ MVP 先支持 CLI，完整闭环通过后再加入 Streamlit。
 4. **Execution**：点击批准并执行，展示逐项状态和失败原因。
 5. **History & Undo**：查看执行历史，选择可撤销的批次或文件项。
 
-### 11.2 CLI 预期命令（接口设计，并非已实现）
+### 11.2 CLI 预期命令（`scan`/`plan` 已实现；`inspect-plan`/`apply`/`history`/`undo` 待 M3）
 
 ```bash
 uv run sorta scan ./fixtures/downloads
@@ -570,6 +570,7 @@ SORTA_MODEL=your-model-name
 SORTA_BASE_URL=https://your-provider.example/v1
 SORTA_API_KEY=replace-me
 SORTA_MAX_AGENT_STEPS=8
+SORTA_MAX_TOOL_CALLS=40
 SORTA_MAX_SCAN_FILES=200
 SORTA_MAX_READ_CHARS=5000
 SORTA_MAX_FILE_BYTES=20971520
@@ -640,11 +641,11 @@ SORTA_DEFAULT_PRIVACY=ask_before_content
 - [x] 完成文本/PDF/DOCX Reader。
 - [x] 建立 `tmp_path` 测试样例。
 
-**M2**
-- [ ] 实现只读工具白名单和输入 Schema。
-- [ ] 接入 Tool Calling 客户端。
-- [ ] 定义 Prompt：目标、约束、不可信文档内容、低信心处理。
-- [ ] 输出 Pydantic `ExecutionPlan`。
+**M2**（已完成 2026-10-24：只读工具白名单、手写 Tool Calling 循环、结构化 ExecutionPlan，Mock LLM 全覆盖）
+- [x] 实现只读工具白名单和输入 Schema。
+- [x] 接入 Tool Calling 客户端。
+- [x] 定义 Prompt：目标、约束、不可信文档内容、低信心处理。
+- [x] 输出 Pydantic `ExecutionPlan`。
 
 **M3**
 - [ ] 实现路径验证、冲突检测、计划哈希。
