@@ -30,7 +30,11 @@ class LLMClient(Protocol):
     """最小客户端协议：controller 只依赖这个接口，便于 Mock 测试与换供应商。"""
 
     def chat(
-        self, *, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse: ...
 
 
@@ -38,6 +42,7 @@ class OpenAICompatClient:
     """基于 openai SDK 的 OpenAI 兼容实现（base_url 可指向任意兼容服务商）。
 
     total_usage 累计 token 用量，供评估脚本统计调用成本（§13.3）。
+    tools=None 时为普通对话调用（如文件内容总结），不携带工具清单。
     """
 
     def __init__(self, *, api_key: str, base_url: str | None = None, timeout: float = 120.0):
@@ -47,7 +52,11 @@ class OpenAICompatClient:
         self.total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "requests": 0}
 
     def chat(
-        self, *, model: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
         resp = self._client.chat.completions.create(
             model=model,
