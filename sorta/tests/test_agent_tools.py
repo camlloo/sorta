@@ -48,7 +48,12 @@ def test_whitelist_rejects_non_readonly_tools(env):
         assert record.ok is False
         assert "白名单" in record.summary
     assert set(READ_ONLY_TOOLS) <= {s["function"]["name"] for s in dispatcher.specs}
-    assert PLAN_TOOL not in {s["function"]["name"] for s in dispatcher.specs}
+    # submit_plan 是计划提交通道：必须声明在工具清单中供模型调用，
+    # 但绕过 controller 直接调度时仍被 dispatch 层拒绝（防御纵深）
+    spec_names = {s["function"]["name"] for s in dispatcher.specs}
+    assert PLAN_TOOL in spec_names
+    record = dispatcher.dispatch(PLAN_TOOL, "{}")
+    assert record.ok is False and "白名单" in record.summary
 
 
 def test_list_files_uses_precreated_session_and_pagination(env):

@@ -117,6 +117,25 @@ def _function_spec(
     }
 
 
+_OPERATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "source_id": {"type": "string", "description": "list_files 返回的 file_id"},
+        "destination": {
+            "type": "string",
+            "description": "相对根目录的目标文件路径（正斜杠分隔，禁止绝对路径与 ..）",
+        },
+        "action": {"type": "string", "enum": ["move", "copy"]},
+        "reason": {
+            "type": "string",
+            "description": "判断依据（中文，基于真实观察到的名称/内容/类型）",
+        },
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    },
+    "required": ["source_id", "destination", "action", "reason", "confidence"],
+}
+
+
 class ToolDispatcher:
     """只读工具调度器：白名单、参数校验、隐私门、审计日志的唯一入口。"""
 
@@ -190,6 +209,29 @@ class ToolDispatcher:
                     ["file_id"],
                 )
             )
+        # submit_plan 是计划提交通道：必须出现在工具清单中，模型才能调用；
+        # 它不是文件工具，dispatch 层仍会拒绝直接调度（由 controller 截获处理）。
+        specs.append(
+            _function_spec(
+                PLAN_TOOL,
+                "提交最终整理计划。调查完成后必须通过本工具提交；禁止在文本回复中输出计划 JSON。",
+                {
+                    "scan_id": {"type": "string", "description": "当前扫描会话 ID"},
+                    "summary": {"type": "string", "description": "计划摘要（中文）"},
+                    "operations": {
+                        "type": "array",
+                        "items": _OPERATION_SCHEMA,
+                        "description": "逐文件操作列表；没有把握的文件不要放入",
+                    },
+                    "uncertain_files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "无法确定关联性的 file_id 列表（不移动，交由用户决定）",
+                    },
+                },
+                ["scan_id", "summary", "operations", "uncertain_files"],
+            )
+        )
         return specs
 
     @property
