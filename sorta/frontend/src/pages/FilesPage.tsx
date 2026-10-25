@@ -1,13 +1,6 @@
 import { useEffect, useState } from "react";
 import { useWorkspace } from "../App";
-import {
-  api,
-  formatEpoch,
-  formatSize,
-  type DuplicateReport,
-  type FileRow,
-  type PlanDetail,
-} from "../services/api";
+import { api, formatEpoch, formatSize, type FileRow } from "../services/api";
 
 /** 示意图 ③ 文件库（UX-03/04）：索引表 + 搜索 + 详情/预览/总结（隐私门）+
  * 重复检测（覆盖范围）+ 扫描范围提示与重新扫描。历史已独立为「历史」页。 */
@@ -22,9 +15,8 @@ export default function FilesPage() {
     error: string | null;
   } | null>(null);
   const [summary, setSummary] = useState("");
-  const [dupReport, setDupReport] = useState<DuplicateReport | null>(null);
-  const [archivePick, setArchivePick] = useState<Record<string, boolean>>({});
-  const [ocrText, setOcrText] = useState<{ text: string; source: string } | null>(null);
+  const [dupGroups, setDupGroups] = useState<string[][] | null>(null);
+  const [dupScope, setDupScope] = useState<{ checked: number; skipped: number } | null>(null);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [notice, setNotice] = useState("");
@@ -33,9 +25,8 @@ export default function FilesPage() {
     setSelected(null);
     setPreview(null);
     setSummary("");
-    setDupReport(null);
-    setArchivePick({});
-    setOcrText(null);
+    setDupGroups(null);
+    setDupScope(null);
   }, [workspace.scanId]);
 
   if (!workspace.scanId) {
@@ -120,80 +111,10 @@ export default function FilesPage() {
     setMessage("");
     try {
       const data = await api.findDuplicates(workspace.scanId);
-      setDupReport(data);
-      const picks: Record<string, boolean> = {};
-      data.groups.forEach((g) =>
-        g.files.forEach((f) => {
-          if (f !== g.keep) picks[g.file_ids[f]] = true;
-        }),
-      );
-      setArchivePick(picks);
+      setDupGroups(data.groups);
+      setDupScope({ checked: data.checked, skipped: data.skipped });
     } catch (err) {
       setMessage((err as Error).message);
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function archivePicked() {
-    if (!workspace.scanId) return;
-    const fileIds = Object.entries(archivePick)
-      .filter(([, v]) => v)
-      .map(([k]) => k);
-    if (fileIds.length === 0) {
-      setMessage("请先勾选要归档的副本。");
-      return;
-    }
-    setBusy("archive");
-    setMessage("");
-    try {
-      const created = await api.archiveDuplicates(workspace.scanId, fileIds);
-      const detail: PlanDetail = await api.getPlan(created.plan_id);
-      if (detail.has_errors) {
-        const first = detail.issues.find((i) => i.level === "error");
-        setMessage(`归档计划存在校验错误：${first?.message ?? ""}`);
-        return;
-      }
-      const approval = await api.approvePlan(created.plan_id, created.version, created.plan_hash);
-      const result = await api.execute(approval.approval_id);
-      setMessage(
-        result.status === "completed"
-          ? `已归档 ${result.operations.length} 个副本到「重复文件归档/」（可撤销：历史页 ${result.execution_id}）。`
-          : `归档部分失败（${result.status}），详见历史页 ${result.execution_id}。`,
-      );
-      const info = await api.rescanWorkspace(workspace.scanId);
-      workspace.setWorkspace(info);
-      const data = await api.findDuplicates(info.scan_id);
-      setDupReport(data);
-      setArchivePick({});
-    } catch (err) {
-      setMessage((err as Error).message);
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function doOcr(confirm = false) {
-    if (!selectedFile || !workspace.scanId) return;
-    setBusy("ocr");
-    setMessage("");
-    setOcrText(null);
-    try {
-      const result = await api.ocrFile(workspace.scanId, selectedFile.file_id, confirm);
-      setOcrText({ text: result.text, source: result.source });
-    } catch (err) {
-      const apiErr = err as Error & { code?: string };
-      if (apiErr.code === "CONSENT_REQUIRED" && !confirm) {
-        const confirmed = window.confirm(`${apiErr.message}\n\n是否允许本次识别？`);
-        if (confirmed) {
-          setBusy("");
-          await doOcr(true);
-          return;
-        }
-        setMessage("未授权发送图片，OCR 未执行。");
-      } else {
-        setMessage(apiErr.message);
-      }
     } finally {
       setBusy("");
     }
@@ -293,23 +214,6 @@ export default function FilesPage() {
               {busy === "summarize" ? "总结中…" : "📄 让 SORTA 总结此文件"}
             </button>
           </div>
-          {["png", "jpg", "jpeg"].includes(selectedFile.extension) && (
-            <button
-              className="rounded border border-neutral-300 px-3 py-1.5 text-xs disabled:opacity-50"
-              disabled={busy !== ""}
-              onClick={() => doOcr(false)}
-            >
-              {busy === "ocr" ? "识别中…" : "🔍 OCR 识别（发送云端视觉模型）"}
-            </button>
-          )}
-          {ocrText && (
-            <div className="mt-3">
-              <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-neutral-50 p-3 text-xs">
-                {ocrText.text}
-              </pre>
-              <p className="mt-1 text-xs text-amber-600">来源：{ocrText.source}</p>
-            </div>
-          )}
           {notice && <p className="mt-2 text-xs text-neutral-500">{notice}</p>}
           {preview && (
             <div className="mt-3">
@@ -331,9 +235,9 @@ export default function FilesPage() {
       )}
 
       <div className="mt-6 max-w-3xl rounded border border-neutral-200 p-4">
-        <h2 className="text-sm font-bold">重复文件治理</h2>
+        <h2 className="text-sm font-bold">重复文件检测</h2>
         <p className="mt-1 text-xs text-neutral-500">
-          先按大小分组、仅对同大小文件计算内容哈希；只列出与建议，不自动删除。
+          按内容 SHA-256 比对；SORTA 只负责列出，不会自动删除。
         </p>
         <button
           className="mt-2 rounded border border-neutral-300 px-3 py-1.5 text-xs disabled:opacity-50"
@@ -342,48 +246,34 @@ export default function FilesPage() {
         >
           {busy === "dup" ? "比对中…" : "✨ 查找重复文件"}
         </button>
-        {dupReport !== null && (
-          <div className="mt-3 space-y-2 text-xs">
-            <p className="text-neutral-700">
-              {dupReport.note}
-              {dupReport.total_wasted_bytes > 0 &&
-                ` 可释放空间约 ${formatSize(dupReport.total_wasted_bytes)}（按副本数×文件大小估算）。`}
-            </p>
-            {dupReport.groups.map((group, gi) => (
-              <div key={gi} className="rounded border border-neutral-100 p-2">
-                <div className="font-semibold">
-                  组 {gi + 1}：{group.files.length} 个副本 · {formatSize(group.size)} · 浪费{" "}
-                  {formatSize(group.wasted_bytes)}
-                </div>
-                <div className="mt-1 text-neutral-400">建议保留：{group.keep}</div>
-                {group.files.map((f) => (
-                  <label key={f} className="mt-1 flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={archivePick[group.file_ids[f]] ?? false}
-                      onChange={(e) =>
-                        setArchivePick((p) => ({
-                          ...p,
-                          [group.file_ids[f]]: e.target.checked,
-                        }))
-                      }
-                    />
-                    <span className={`font-mono ${f === group.keep ? "text-neutral-400" : ""}`}>
-                      {f}
-                      {f === group.keep && "（建议保留）"}
-                    </span>
-                  </label>
+        {dupGroups !== null && dupScope !== null && (
+          <div className="mt-3 space-y-1 text-xs">
+            {dupGroups.length === 0 ? (
+              <p className="text-neutral-500">
+                在已检查的 {dupScope.checked} 个文件中未发现重复
+                {dupScope.skipped > 0 &&
+                  `（跳过 ${dupScope.skipped} 个无法读取或超过大小上限的文件）`}
+                。
+              </p>
+            ) : (
+              <>
+                <p className="text-neutral-700">
+                  发现 {dupGroups.length} 组重复文件（共{" "}
+                  {dupGroups.reduce((n, g) => n + g.length, 0)} 个，内容完全相同）——
+                  已检查 {dupScope.checked} 个
+                  {dupScope.skipped > 0 && `，跳过 ${dupScope.skipped} 个`}：
+                </p>
+                {dupGroups.map((group, i) => (
+                  <p key={i}>
+                    <span className="font-semibold">组 {i + 1}</span>：
+                    {group.map((p) => (
+                      <span key={p} className="mr-2 font-mono text-neutral-600">
+                        {p}
+                      </span>
+                    ))}
+                  </p>
                 ))}
-              </div>
-            ))}
-            {dupReport.groups.length > 0 && (
-              <button
-                className="rounded bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-                disabled={busy !== ""}
-                onClick={archivePicked}
-              >
-                {busy === "archive" ? "归档中…" : "归档所选副本（生成计划并执行，可撤销）"}
-              </button>
+              </>
             )}
           </div>
         )}
