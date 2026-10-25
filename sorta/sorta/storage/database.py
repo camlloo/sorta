@@ -53,7 +53,7 @@ def init_db(engine: Engine) -> None:
     _run_migrations(engine)
 
 
-_LATEST_SCHEMA_VERSION = 3
+_LATEST_SCHEMA_VERSION = 4
 
 
 def _run_migrations(engine: Engine) -> None:
@@ -93,8 +93,7 @@ _BUILTIN_TEMPLATES = [
     ),
     (
         "项目交付整理",
-        "按项目名建立目录；交付材料（报告、截图、数据）放入对应子目录；"
-        "生成物与源文件分开存放。",
+        "按项目名建立目录；交付材料（报告、截图、数据）放入对应子目录；生成物与源文件分开存放。",
     ),
     (
         "下载目录清理",
@@ -118,8 +117,11 @@ def _migrate_2_seed_templates(engine: Engine) -> None:
             if exists is None:
                 db.add(
                     TemplateRow(
-                        name=name, instruction=instruction, enabled=True,
-                        builtin=True, created_at=_time.time(),
+                        name=name,
+                        instruction=instruction,
+                        enabled=True,
+                        builtin=True,
+                        created_at=_time.time(),
                     )
                 )
 
@@ -137,10 +139,30 @@ def _migrate_3_add_conversations(engine: Engine) -> None:
     )
 
 
+def _migrate_4_directory_records_and_conversation_plans(engine: Engine) -> None:
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(file_registry)"))}
+        if "is_regular_file" not in columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE file_registry ADD COLUMN "
+                    "is_regular_file BOOLEAN NOT NULL DEFAULT 1"
+                )
+            )
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(conversations)"))}
+        if "plan_id" not in columns:
+            conn.execute(
+                text("ALTER TABLE conversations ADD COLUMN plan_id INTEGER REFERENCES plans(id)")
+            )
+
+
 _MIGRATIONS = {
     1: _migrate_1_add_plan_version,
     2: _migrate_2_seed_templates,
     3: _migrate_3_add_conversations,
+    4: _migrate_4_directory_records_and_conversation_plans,
 }
 
 

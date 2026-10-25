@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useWorkspace } from "../App";
 import Markdown from "../components/Markdown";
 import PlanPanel from "../components/PlanPanel";
@@ -68,20 +68,63 @@ export default function ChatPage() {
   });
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [loadingConversation, setLoadingConversation] = useState(() => localStorage.getItem(KEY.conversationId) !== null);
   const [input, setInput] = useState("");
-  const [plan, setPlan] = useState<PlanDetail | null>(null);
+  const [plan, setPlanState] = useState<PlanDetail | null>(null);
+  const setPlan = useCallback((detail: PlanDetail | null) => {
+    setPlanState(detail);
+    if (detail) sessionStorage.setItem(KEY.planId, JSON.stringify(detail.plan_id));
+    else sessionStorage.removeItem(KEY.planId);
+  }, []);
   const [toolEvents, setToolEvents] = useState<string[]>(() => load(KEY.toolEvents, []));
   const [planning, setPlanning] = useState<boolean>(() => !!sessionStorage.getItem(KEY.jobId));
   const [jobId, setJobId] = useState<string | null>(() => sessionStorage.getItem(KEY.jobId));
   const abortRef = useRef<AbortController | null>(null);
+  const lifecycleRef = useRef(new AbortController());
   const [lastExecution, setLastExecution] = useState<ExecutionDetail | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templateId, setTemplateId] = useState<number | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
+  const contentHeight = useRef(0);
 
-  const planningBlocked = planning || !workspace.scanId || !workspace.hasApiKey;
+  useLayoutEffect(() => {
+    const container = scrollRef.current;
+    if (container && followLatest.current) {
+      container.scrollTop = container.scrollHeight;
+      contentHeight.current = container.scrollHeight;
+    }
+  }, [messages, planning]);
+
+  useEffect(() => {
+    const container = scrollRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+    const observer = new ResizeObserver(() => {
+      if (followLatest.current) container.scrollTop = container.scrollHeight;
+      contentHeight.current = container.scrollHeight;
+    });
+    observer.observe(content);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    lifecycleRef.current = controller;
+    return () => {
+      controller.abort();
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  const planningBlocked = planning || loadingConversation || !workspace.scanId || !workspace.hasApiKey;
   const disabled = planningBlocked || input.trim() === "";
-  const canRevise = plan !== null && !lastExecution && !planning;
+  const canRevise = plan !== null && plan.operations.length > 0 &&
+    ["draft", "validated", "awaiting_approval", "approved", "stale"].includes(plan.status) &&
+    !lastExecution && !planning;
 
   // 「/」快捷聚焦输入框
   useEffect(() => {
@@ -112,18 +155,35 @@ export default function ChatPage() {
     if (conversationId === null) {
       localStorage.removeItem(KEY.conversationId);
       setMessages([]);
+      setLoadingConversation(false);
       return;
     }
     localStorage.setItem(KEY.conversationId, String(conversationId));
+    if (planning) return;
+    let active = true;
     api
       .getMessages(conversationId)
-      .then((data) =>
-        setMessages(data.messages.map((m) => ({ role: m.role, content: m.content }))),
-      )
-      .catch(() => {
-        localStorage.removeItem(KEY.conversationId);
-        setConversationId(null);
-      });
+      .then(async (data) => {
+        if (!active) return;
+        setMessages(data.messages.map((m) => ({ role: m.role, content: m.content })));
+        if (data.conversation.plan_id) {
+          const detail = await api.getPlan(data.conversation.plan_id).catch(() => null);
+          if (active) setPlan(detail);
+        }
+      })
+      .catch((err: Error & { status?: number }) => {
+        if (!active) return;
+        if (err.status === 404) {
+          localStorage.removeItem(KEY.conversationId);
+          setConversationId(null);
+        } else {
+          setMessages((m) => [...m, { role: "assistant", content: `读取对话失败，请刷新重试：${err.message}` }]);
+        }
+      })
+      .finally(() => { if (active) setLoadingConversation(false); });
+    return () => { active = false; };
+    // 任务执行时保留乐观消息；完成时由 finishTask 刷新。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
   const refreshMessages = useCallback(async (cid: number | null) => {
@@ -147,45 +207,11 @@ export default function ChatPage() {
     }
   }, [workspace.hasApiKey, templates.length]);
 
-  // 恢复：计划详情 + 未完成任务轮询
-  useEffect(() => {
-    const savedPlanId = load<number | null>(KEY.planId, null);
-    if (savedPlanId && !plan) {
-      api
-        .getPlan(savedPlanId)
-        .then(setPlan)
-        .catch(() => sessionStorage.removeItem(KEY.planId));
-    }
-    const savedJobId = sessionStorage.getItem(KEY.jobId);
-    if (savedJobId && planning) {
-      void pollJob(savedJobId).catch((err: Error & { status?: number }) => {
-        setMessages((m) => [
-          ...m,
-          {
-            role: "assistant",
-            content:
-              err.status === 404
-                ? "任务已中断（服务可能已重启）。请重新发起请求。"
-                : `任务状态查询失败：${err.message}`,
-          },
-        ]);
-        setPlanning(false);
-        setJobId(null);
-        sessionStorage.removeItem(KEY.jobId);
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (plan) sessionStorage.setItem(KEY.planId, JSON.stringify(plan.plan_id));
-    else sessionStorage.removeItem(KEY.planId);
-  }, [plan]);
-
   const pollJob = useCallback(
-    async (id: string): Promise<JobSnapshot> => {
+    async (id: string, signal?: AbortSignal): Promise<JobSnapshot> => {
       for (;;) {
         await new Promise((r) => setTimeout(r, 1500));
+        signal?.throwIfAborted();
         let snapshot: JobSnapshot;
         try {
           snapshot = await api.getJob(id);
@@ -211,132 +237,157 @@ export default function ChatPage() {
   );
 
   const finishTask = useCallback(
-    (
+    async (
       snapshot: JobSnapshot,
-      _mode: "new" | "revise",
+      mode: "new" | "revise",
       _prevPlan: PlanDetail | null,
       currentConversationId: number | null,
     ) => {
-      const refresh = () => void refreshMessages(currentConversationId);
       if (snapshot.status === "completed" && snapshot.result) {
         const result = snapshot.result;
         if (result.task_type === "organize") {
-          void api
-            .getPlan(result.plan_id)
-            .then((detail) => {
-              setPlan(detail);
-              sessionStorage.setItem(KEY.planId, JSON.stringify(result.plan_id));
-              void workspace.refreshFiles(result.scan_id);
-            })
-            .then(refresh)
-            .catch((err: Error) => {
-              setMessages((m) => [
-                ...m,
-                { role: "assistant", content: `获取计划失败：${err.message}` },
-              ]);
-            });
+          const detail = await api.getPlan(result.plan_id);
+          setPlan(detail);
+          setLastExecution(null);
+          await refreshMessages(currentConversationId);
+          if (mode === "revise" && currentConversationId === null) {
+            setMessages((m) => [...m, {
+              role: "assistant", content: `### 计划已更新\n\n**v${detail.version}**\n\n${detail.summary}`,
+            }]);
+          }
         } else {
-          setPlan(null);
-          sessionStorage.removeItem(KEY.planId);
-          refresh();
+          await refreshMessages(currentConversationId);
         }
       } else if (snapshot.status === "failed") {
+        await refreshMessages(currentConversationId);
         setMessages((m) => [
           ...m,
           { role: "assistant", content: `处理失败：${snapshot.error?.message ?? "未知错误"}` },
         ]);
-        refresh();
       } else {
         setMessages((m) => [...m, { role: "assistant", content: "已取消本次任务。" }]);
       }
       setPlanning(false);
+      setLoadingConversation(false);
       setJobId(null);
       sessionStorage.removeItem(KEY.jobId);
     },
-    [workspace, refreshMessages],
+    [refreshMessages, setPlan],
   );
+
+  // 刷新或切回页面后继续处理任务结果，StrictMode 清理旧轮询。
+  useEffect(() => {
+    const controller = new AbortController();
+    const restore = async () => {
+      try {
+        const id = sessionStorage.getItem(KEY.jobId);
+        if (id) {
+          const snapshot = await pollJob(id, controller.signal);
+          controller.signal.throwIfAborted();
+          await finishTask(snapshot, snapshot.kind === "plan-revision" ? "revise" : "new",
+            null, conversationId);
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setMessages((m) => [...m, {
+          role: "assistant", content: `恢复失败：${(err as Error).message}`,
+        }]);
+        setPlanning(false);
+        setLoadingConversation(false);
+        setJobId(null);
+        sessionStorage.removeItem(KEY.jobId);
+      }
+    };
+    void restore();
+    return () => controller.abort();
+    // 仅在页面挂载时恢复；后续任务由 send 管理。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const send = useCallback(
     async (text: string, taskType: "auto" | "find" | "ask" | "organize" = "auto") => {
       const clean = text.trim();
       if (!clean || planningBlocked || !workspace.scanId) return;
+      followLatest.current = true;
       setMessages((m) => [...m, { role: "user", content: clean }]);
       setInput("");
       setPlanning(true);
       setToolEvents([]);
-      setLastExecution(null);
       abortRef.current = new AbortController();
 
-      const reviseMode = plan !== null && !lastExecution;
-      const prevPlan = plan;
-      if (!reviseMode) {
-        setPlan(null);
-        sessionStorage.removeItem(KEY.planId);
-      }
+      const activePlan = canRevise ? plan : null;
 
       // 无会话则先创建（多轮对话载体；跨关闭保留在数据库）
       let cid = conversationId;
-      if (!reviseMode && cid === null) {
-        const conv = await api.createConversation(workspace.scanId);
-        cid = conv.id;
-        setConversationId(cid);
-        const list = await api.listConversations().catch(() => null);
-        if (list) setConversations(list.conversations);
-      }
-
-      const runJob = async (explicitType: "auto" | "find" | "ask" | "organize") => {
-        if (!workspace.scanId) return;
-        const { job_id } = await api.createTask(
-          workspace.scanId,
-          clean,
-          explicitType,
-          templateId,
-          workspace.privacy,
-          cid,
-        );
-        setJobId(job_id);
-        sessionStorage.setItem(KEY.jobId, job_id);
-        const snapshot = await pollJob(job_id);
-        finishTask(snapshot, "new", null, cid);
-      };
-
-      const patchLast = (content: string) =>
-        setMessages((m) => {
-          const next = [...m];
-          if (next.length > 0 && next[next.length - 1].role === "assistant") {
-            next[next.length - 1] = { role: "assistant", content };
-          } else {
-            next.push({ role: "assistant", content });
-          }
-          return next;
-        });
-
+      const lifecycle = lifecycleRef.current.signal;
       try {
-        if (reviseMode) {
-          const { job_id } = await api.revisePlan(plan!.plan_id, clean, plan!.version);
+        if (cid === null) {
+          const conv = await api.createConversation(workspace.scanId);
+          cid = conv.id;
+          lifecycle.throwIfAborted();
+          abortRef.current?.signal.throwIfAborted();
+          setConversationId(cid);
+          const list = await api.listConversations().catch(() => null);
+          if (list) setConversations(list.conversations);
+        }
+
+        const runJob = async (explicitType: "auto" | "find" | "ask" | "organize") => {
+          if (!workspace.scanId) return;
+          abortRef.current?.signal.throwIfAborted();
+          const { job_id } = await api.createTask(
+            workspace.scanId,
+            clean,
+            explicitType,
+            templateId,
+            workspace.privacy,
+            cid,
+          );
           setJobId(job_id);
           sessionStorage.setItem(KEY.jobId, job_id);
-          const snapshot = await pollJob(job_id);
-          finishTask(snapshot, "revise", prevPlan, cid);
-        } else if (taskType === "find" || taskType === "organize") {
+          if (abortRef.current?.signal.aborted) await api.cancelJob(job_id);
+          const snapshot = await pollJob(job_id, lifecycle);
+          await finishTask(snapshot, "new", null, cid);
+        };
+
+        const patchLast = (content: string) =>
+          setMessages((m) => {
+            const next = [...m];
+            if (next.length > 0 && next[next.length - 1].role === "assistant") {
+              next[next.length - 1] = { role: "assistant", content };
+            } else {
+              next.push({ role: "assistant", content });
+            }
+            return next;
+          });
+
+        if (taskType === "find" || taskType === "organize") {
           await runJob(taskType);
         } else {
           // auto / ask：流式（SSE）——分类在服务端完成，organize 自动转 job
           setMessages((m) => [...m, { role: "assistant", content: "" }]);
           let streamed = "";
           let redirected = false;
+          let revision: { plan_id: number; version: number } | null = null;
           await api.streamTask(
             {
               scan_id: workspace.scanId,
               request: clean,
-              task_type: "auto",
+              task_type: taskType,
               template_id: templateId,
               conversation_id: cid,
+              active_plan_id: activePlan?.plan_id ?? null,
             },
             (event: StreamEvent) => {
+              if ("conversation_id" in event && event.conversation_id !== null) {
+                cid = event.conversation_id;
+                localStorage.setItem(KEY.conversationId, String(cid));
+                setConversationId(cid);
+              }
               if (event.type === "delta") {
                 streamed += event.text;
                 patchLast(streamed);
+              } else if (event.type === "done") {
+                patchLast(event.answer || "（模型未返回内容）");
               } else if (event.type === "clarify") {
                 patchLast(event.question);
               } else if (event.type === "find") {
@@ -348,17 +399,29 @@ export default function ChatPage() {
                 patchLast(`${r.note}\n${lines.join("\n")}`);
               } else if (event.type === "organize") {
                 redirected = true;
+              } else if (event.type === "revise") {
+                revision = { plan_id: event.plan_id, version: event.version };
               }
             },
             abortRef.current?.signal,
           );
-          if (redirected) {
+          if (redirected || revision) {
             setMessages((m) => {
               const next = [...m];
               if (next.length > 0 && next[next.length - 1].role === "assistant") next.pop();
               return next;
             });
-            await runJob("organize");
+            if (revision) {
+              const target = revision as { plan_id: number; version: number };
+              const { job_id } = await api.revisePlan(target.plan_id, clean, target.version, cid);
+              setJobId(job_id);
+              sessionStorage.setItem(KEY.jobId, job_id);
+              if (abortRef.current?.signal.aborted) await api.cancelJob(job_id);
+              const snapshot = await pollJob(job_id, lifecycle);
+              await finishTask(snapshot, "revise", activePlan, cid);
+            } else {
+              await runJob("organize");
+            }
           } else {
             // ask/clarify/find 流式完成：复位输入状态（会话消息已由服务端落库）
             setPlanning(false);
@@ -369,6 +432,7 @@ export default function ChatPage() {
           }
         }
       } catch (err) {
+        if (lifecycle.aborted) return;
         if ((err as Error).name === "AbortError") {
           setMessages((m) => [...m, { role: "system", content: "— 已取消 —" }]);
         } else {
@@ -383,7 +447,7 @@ export default function ChatPage() {
         sessionStorage.removeItem(KEY.jobId);
       }
     },
-    [planningBlocked, workspace, plan, lastExecution, templateId, pollJob, finishTask, conversationId, refreshMessages],
+    [planningBlocked, workspace, plan, canRevise, templateId, pollJob, finishTask, conversationId, refreshMessages],
   );
 
   const cancelPlanning = useCallback(async () => {
@@ -392,18 +456,21 @@ export default function ChatPage() {
   }, [jobId]);
 
   const switchConversation = useCallback((id: number | null) => {
+    followLatest.current = true;
     setPlan(null);
     setToolEvents([]);
     setLastExecution(null);
     setConversationId(id);
-  }, []);
+    setMessages([]);
+    setLoadingConversation(id !== null);
+  }, [setPlan]);
 
   return (
-    <div className="flex h-full min-h-0">
-      <div className="flex min-w-0 flex-1 flex-col">
+    <div className="flex h-full min-h-0 flex-col xl:flex-row">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* 顶栏：状态条 */}
-        <div className="flex items-center justify-between border-b border-rule px-8 py-3">
-          <div className="flex items-center gap-3 text-[13px]">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule px-4 py-3 sm:px-8">
+          <div className="flex flex-wrap items-center gap-3 text-[13px]">
             <span className="font-semibold">{workspace.model || "未配置模型"}</span>
             {!workspace.hasApiKey && (
               <span className="border-b-2 border-signal pb-0.5 text-signal">未配置 API Key</span>
@@ -423,6 +490,7 @@ export default function ChatPage() {
                 switchConversation(e.target.value ? Number(e.target.value) : null)
               }
               title="对话历史（保存在本机数据库）"
+              disabled={planning}
             >
               <option value="">新对话</option>
               {conversations.map((c) => (
@@ -431,10 +499,18 @@ export default function ChatPage() {
                 </option>
               ))}
             </select>
+            <button
+              className="border border-rule px-2 py-1 text-[11px] disabled:opacity-40"
+              disabled={planning}
+              onClick={() => switchConversation(null)}
+            >
+              新对话
+            </button>
             {conversationId !== null && (
               <button
                 className="border border-rule px-2 py-1 font-mono text-[10px] transition-colors duration-100 hover:border-signal hover:text-signal"
                 title="删除当前对话（不影响计划与执行历史）"
+                disabled={planning}
                 onClick={async () => {
                   if (!window.confirm("删除当前对话记录？此操作不可恢复。")) return;
                   await api.deleteConversation(conversationId).catch(() => undefined);
@@ -450,14 +526,25 @@ export default function ChatPage() {
         </div>
         {planning && <div className="marquee-line" aria-hidden />}
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
+        <div
+          ref={scrollRef}
+          className="conversation-scroll min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8"
+          onScroll={(event) => {
+            const container = event.currentTarget;
+            if (container.scrollHeight === contentHeight.current) {
+              followLatest.current = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+            }
+            contentHeight.current = container.scrollHeight;
+          }}
+        >
+          <div ref={contentRef}>
           {messages.length === 0 ? (
             <div className="mx-auto max-w-2xl rise-in">
               {/* 海报式空态：排版即界面 */}
               <div className="mt-10">
                 <div className="eyebrow">本地文件调度台</div>
                 <h1
-                  className="mt-3 text-[72px] leading-[0.95] font-extrabold tracking-[-0.04em]"
+                  className="mt-3 text-[clamp(42px,8vw,72px)] leading-[0.95] font-extrabold tracking-[-0.04em]"
                   style={{ fontWeight: 850 }}
                 >
                   把混乱
@@ -489,7 +576,7 @@ export default function ChatPage() {
               )}
             </div>
           ) : (
-            <div className="mx-auto max-w-2xl space-y-5">
+            <div className="mx-auto max-w-2xl space-y-9">
               {messages.map((msg, i) =>
                 msg.role === "system" ? (
                   <div key={i} className="border-t border-rule pt-2 text-center font-mono text-[10px] tracking-wider text-graphite">
@@ -498,14 +585,14 @@ export default function ChatPage() {
                 ) : (
                   <div key={i} className={msg.role === "user" ? "text-right" : ""}>
                     <div
-                      className={`inline-block max-w-[88%] text-left text-[13.5px] leading-relaxed whitespace-pre-wrap ${
+                      className={`text-left ${
                         msg.role === "user"
-                          ? "bg-ink px-4 py-2.5 text-paper"
-                          : "border-l-2 border-rule-strong pl-4"
+                          ? "inline-block max-w-[88%] whitespace-pre-wrap bg-ink px-4 py-3 text-[14px] leading-relaxed text-paper"
+                          : "w-full min-w-0 py-1"
                       }`}
                     >
                       {msg.role === "assistant" && (
-                        <div className="eyebrow mb-1">SORTA</div>
+                        <div className="mb-3 text-[11px] font-semibold tracking-[0.14em] text-graphite">SORTA</div>
                       )}
                       {msg.role === "assistant" ? (
                         msg.content ? (
@@ -552,10 +639,11 @@ export default function ChatPage() {
               )}
             </div>
           )}
+          </div>
         </div>
 
         {/* Composer */}
-        <div className="border-t-2 border-ink px-8 py-4">
+        <div className="border-t-2 border-ink px-4 py-4 sm:px-8">
           <div className="mx-auto max-w-2xl">
             {templates.length > 0 && !canRevise && (
               <div className="mb-2 flex items-center gap-2 text-[11px] text-graphite">
@@ -580,7 +668,7 @@ export default function ChatPage() {
                 className="h-12 min-h-12 flex-1 resize-none border-b border-rule-strong bg-transparent px-1 py-2.5 text-[14px] leading-relaxed transition-colors duration-100 focus:border-signal focus:outline-none disabled:opacity-40"
                 placeholder={
                   canRevise
-                    ? "输入修改要求，例如：安装包别动，学习资料按课程分"
+                    ? "继续补充要求，或提出新的任务"
                     : "输入需求，或按 / 聚焦——查找、提问或整理"
                 }
                 rows={1}
@@ -588,7 +676,7 @@ export default function ChatPage() {
                 disabled={planningBlocked}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
+                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault();
                     void send(input);
                   }
@@ -604,7 +692,7 @@ export default function ChatPage() {
             </div>
             {canRevise && (
               <p className="mt-1.5 font-mono text-[10px] text-graphite">
-                当前有待确认计划：输入将被视为修改要求；「新建任务」改为全新任务。
+                当前有待确认计划。可以继续修改、提问，或提出新任务；本轮沿用对话上下文。
               </p>
             )}
           </div>
@@ -612,12 +700,22 @@ export default function ChatPage() {
       </div>
 
       {/* 右栏：执行计划（位移台账） */}
-      <div className="w-[360px] shrink-0 border-l border-rule">
+      <div className={`${plan ? "max-h-[45%] overflow-y-auto" : "hidden xl:block"} w-full shrink-0 border-t border-rule xl:max-h-none xl:w-[360px] xl:border-t-0 xl:border-l`}>
         {plan ? (
           <PlanPanel
+            key={`${plan.plan_id}:${plan.version}`}
             plan={plan}
             toolEvents={toolEvents}
             onPlanReplaced={setPlan}
+            onUndone={(result) => {
+              setLastExecution(result);
+              void refreshMessages(conversationId);
+              if (workspace.scanId) {
+                void api.rescanWorkspace(workspace.scanId)
+                  .then(workspace.setWorkspace)
+                  .catch(() => undefined);
+              }
+            }}
             onCanceled={() => {
               setPlan(null);
               setMessages((m) => [
@@ -627,6 +725,7 @@ export default function ChatPage() {
             }}
             onExecuted={(result) => {
               setLastExecution(result);
+              void refreshMessages(conversationId);
               if (workspace.scanId) {
                 void api
                   .rescanWorkspace(workspace.scanId)

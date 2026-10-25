@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -89,10 +89,13 @@ def create_app(
         @app.get("/{full_path:path}", include_in_schema=False)
         async def spa_fallback(full_path: str) -> FileResponse:
             """SPA 回退：非 API 路径一律返回 index.html（React Router 接管）。"""
+            if full_path == "api" or full_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="API 路径不存在")
             candidate = (dist / full_path).resolve()
             if full_path and candidate.is_file() and candidate.is_relative_to(dist.resolve()):
                 return FileResponse(candidate)
             return FileResponse(dist / "index.html")
+
     return app
 
 

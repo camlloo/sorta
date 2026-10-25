@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -67,6 +68,6 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=422,
             content=error_body(
-                "VALIDATION_ERROR", "请求参数不合法", {"errors": exc.errors(include_url=False)}
+                "VALIDATION_ERROR", "请求参数不合法", {"errors": jsonable_encoder(exc.errors())}
             ),
         )

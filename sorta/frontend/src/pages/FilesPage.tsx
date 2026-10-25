@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useWorkspace } from "../App";
+import Markdown from "../components/Markdown";
 import { api, formatEpoch, formatSize, type FileRow } from "../services/api";
 
 /** 文件库：表格式索引 + 行内浮现操作 + 详情/预览/总结（隐私门）+ 简单重复检测。 */
@@ -19,13 +20,15 @@ export default function FilesPage() {
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
 
-  useEffect(() => {
+  const [scanId, setScanId] = useState(workspace.scanId);
+  if (scanId !== workspace.scanId) {
+    setScanId(workspace.scanId);
     setSelected(null);
     setPreview(null);
     setSummary("");
     setDupGroups(null);
     setDupScope(null);
-  }, [workspace.scanId]);
+  }
 
   if (!workspace.scanId) {
     return (
@@ -93,7 +96,7 @@ export default function FilesPage() {
       setPreview(null);
     } catch (err) {
       const apiErr = err as Error & { code?: string };
-      if (apiErr.code === "CONSENT_REQUIRED" && !confirm) {
+      if (apiErr.code === "CONSENT_REQUIRED" && !confirm && workspace.privacy === "ask_before_content") {
         const confirmed = window.confirm(`${apiErr.message}\n\n是否允许本次读取？`);
         if (confirmed) {
           setBusy("");
@@ -178,6 +181,7 @@ export default function FilesPage() {
           >
             <button
               className="flex min-w-0 flex-1 items-center gap-4 text-left"
+              disabled={busy !== ""}
               onClick={() => {
                 setSelected(f.path);
                 setPreview(null);
@@ -267,8 +271,8 @@ export default function FilesPage() {
             </div>
           )}
           {summary && (
-            <div className="mt-3 border-l-2 border-verify pl-3 text-[12px] leading-relaxed whitespace-pre-wrap">
-              {summary}
+            <div className="mt-4">
+              <Markdown text={summary} />
             </div>
           )}
         </div>

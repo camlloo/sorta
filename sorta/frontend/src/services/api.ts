@@ -40,7 +40,7 @@ export interface PlanOperation {
   source_id: string;
   source: string;
   destination: string;
-  action: "move" | "copy";
+  action: "move" | "copy" | "rmdir";
   confidence: "high" | "medium" | "low";
   reason: string;
 }
@@ -107,6 +107,12 @@ export interface ExecutionDetail {
   status: string;
   started_at: number;
   finished_at: number | null;
+  operations: ExecutionOperation[];
+}
+
+export interface UndoResult {
+  execution_id: string;
+  status: "undone" | "partially_undone";
   operations: ExecutionOperation[];
 }
 
@@ -204,10 +210,10 @@ export const api = {
     ),
   rescanWorkspace: (scanId: string) =>
     request<WorkspaceInfo>(`/api/v1/scans/${scanId}/rescan`, { method: "POST" }),
-  revisePlan: (planId: number, instruction: string, expectedVersion: number) =>
+  revisePlan: (planId: number, instruction: string, expectedVersion: number, conversationId: number | null) =>
     request<{ job_id: string }>(`/api/v1/plans/${planId}/revisions`, {
       method: "POST",
-      body: JSON.stringify({ instruction, expected_version: expectedVersion }),
+      body: JSON.stringify({ instruction, expected_version: expectedVersion, conversation_id: conversationId }),
     }),
   createPlan: (scanId: string, requestText: string, privacy: string) =>
     request<{ job_id: string }>("/api/v1/plans", {
@@ -240,6 +246,7 @@ export const api = {
       task_type: "auto" | "find" | "ask" | "organize";
       template_id: number | null;
       conversation_id: number | null;
+      active_plan_id?: number | null;
     },
     onEvent: (event: StreamEvent) => void,
     signal?: AbortSignal,
@@ -268,18 +275,30 @@ export const api = {
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buf = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const parts = buf.split("\n\n");
-      buf = parts.pop() ?? "";
-      for (const part of parts) {
-        const line = part.trim();
-        if (line.startsWith("data: ")) {
-          onEvent(JSON.parse(line.slice(6)) as StreamEvent);
+    let completed = false;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split("\n\n");
+        buf = parts.pop() ?? "";
+        for (const part of parts) {
+          const line = part.trim();
+          if (line.startsWith("data: ")) {
+            const event = JSON.parse(line.slice(6)) as StreamEvent;
+            if (event.type === "error") {
+              throw new ApiError(event.code, event.message, 502, {});
+            }
+            if (["done", "find", "clarify", "organize", "revise"].includes(event.type)) completed = true;
+            onEvent(event);
+          }
         }
       }
+      if (!completed) throw new ApiError("STREAM_INTERRUPTED", "响应中断，请重试", 502, {});
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
     }
   },
   listConversations: () =>
@@ -339,7 +358,7 @@ export const api = {
       body: JSON.stringify({ approval_id: approvalId }),
     }),
   undo: (executionId: string) =>
-    request<ExecutionDetail>(`/api/v1/executions/${executionId}/undo`, { method: "POST" }),
+    request<UndoResult>(`/api/v1/executions/${executionId}/undo`, { method: "POST" }),
   getExecution: (executionId: string) =>
     request<ExecutionDetail>(`/api/v1/executions/${executionId}`),
   history: () => request<{ executions: HistoryEntry[] }>("/api/v1/history"),
@@ -375,6 +394,7 @@ export interface Conversation {
   scan_id: string;
   title: string;
   updated_at: number;
+  plan_id?: number | null;
 }
 
 export interface ChatMessageRecord {
@@ -385,6 +405,8 @@ export interface ChatMessageRecord {
 }
 
 export type StreamEvent =
+  | { type: "revise"; plan_id: number; version: number; conversation_id: number | null }
+  | { type: "error"; code: string; message: string }
   | { type: "classify"; task_type: string }
   | { type: "delta"; text: string }
   | {

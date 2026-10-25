@@ -40,6 +40,7 @@ class FileRegistryRow(Base):
     extension: Mapped[str] = mapped_column(String(32), default="")
     size: Mapped[int] = mapped_column(BigInteger)
     modified_ns: Mapped[int] = mapped_column(BigInteger)
+    is_regular_file: Mapped[bool] = mapped_column(default=True, server_default="1")
 
 
 class ConversationRow(Base):
@@ -54,6 +55,7 @@ class ConversationRow(Base):
     title: Mapped[str] = mapped_column(String(120), default="")
     created_at: Mapped[float] = mapped_column(BigInteger)
     updated_at: Mapped[float] = mapped_column(BigInteger)
+    plan_id: Mapped[int | None] = mapped_column(ForeignKey("plans.id"), nullable=True)
 
 
 class MessageRow(Base):

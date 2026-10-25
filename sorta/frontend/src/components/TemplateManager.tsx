@@ -26,8 +26,14 @@ export default function TemplateManager() {
   }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    let active = true;
+    api.listTemplates()
+      .then((data) => {
+        if (active) { setTemplates(data.templates); setLoaded(true); }
+      })
+      .catch((err: Error) => { if (active) setError(err.message); });
+    return () => { active = false; };
+  }, []);
 
   async function add() {
     if (!newName.trim() || !newInstruction.trim()) return;

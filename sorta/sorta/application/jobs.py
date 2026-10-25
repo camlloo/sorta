@@ -57,19 +57,26 @@ class JobManager:
             self._jobs[job.id] = job
 
         def _run() -> None:
-            job.status = "running"
-            try:
-                job.result = fn(job.id, job.cancel_event)
-                job.status = "completed"
-            except Exception as exc:  # noqa: BLE001  Job 边界：异常转为失败状态
+            with self._lock:
                 if job.cancel_event.is_set():
-                    job.status = "canceled"
-                    job.error = {"code": "OPERATION_CANCELED", "message": str(exc)}
-                else:
-                    job.status = "failed"
-                    code = getattr(exc, "code", "INTERNAL_ERROR")
-                    job.error = {"code": code, "message": str(exc)}
-            job.finished_at = time.time()
+                    return
+                job.status = "running"
+            try:
+                result = fn(job.id, job.cancel_event)
+                with self._lock:
+                    job.result = result
+                    job.status = "completed"
+                    job.finished_at = time.time()
+            except Exception as exc:  # noqa: BLE001  Job 边界：异常转为失败状态
+                with self._lock:
+                    if job.cancel_event.is_set():
+                        job.status = "canceled"
+                        job.error = {"code": "OPERATION_CANCELED", "message": str(exc)}
+                    else:
+                        job.status = "failed"
+                        code = getattr(exc, "code", "INTERNAL_ERROR")
+                        job.error = {"code": code, "message": str(exc)}
+                    job.finished_at = time.time()
 
         self._pool.submit(_run)
         return job.id
@@ -89,11 +96,11 @@ class JobManager:
         """queued 直接取消；running 置位取消事件，在下一个安全停点生效。"""
         with self._lock:
             job = self._jobs.get(job_id)
-        if job is None or job.status in ("completed", "failed", "canceled"):
-            return False
-        job.cancel_event.set()
-        if job.status == "queued":
-            job.status = "canceled"
-            job.finished_at = time.time()
-            job.error = {"code": "OPERATION_CANCELED", "message": "任务在开始前被取消"}
-        return True
+            if job is None or job.status in ("completed", "failed", "canceled"):
+                return False
+            job.cancel_event.set()
+            if job.status == "queued":
+                job.status = "canceled"
+                job.finished_at = time.time()
+                job.error = {"code": "OPERATION_CANCELED", "message": "任务在开始前被取消"}
+            return True

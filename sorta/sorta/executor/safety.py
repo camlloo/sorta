@@ -9,17 +9,12 @@
 from __future__ import annotations
 
 import os
-import threading
+import shutil
 from pathlib import Path
 
 from sorta.errors import CrossDeviceMoveError, FileConflictError
-
-_EXECUTION_LOCK = threading.Lock()
-
-
-def acquire_execution_lock():
-    """进程内互斥锁（可作 context manager）。"""
-    return _EXECUTION_LOCK
+from sorta.locking import acquire_execution_lock as acquire_execution_lock
+from sorta.scanner.paths import resolve_within_root
 
 
 def metadata_fingerprint(path: str | Path) -> str | None:
@@ -38,9 +33,9 @@ def fingerprints_match(path: str | Path, fingerprint: str | None) -> bool:
 
 def ensure_parent_dirs(root: Path, destination: str) -> Path:
     """创建目标父目录（已解析的边界内路径），返回目标绝对路径。"""
-    dest = Path(os.path.realpath(root)) / destination
+    dest = resolve_within_root(root, destination)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    return dest
+    return resolve_within_root(root, destination)
 
 
 def safe_move(source: Path, destination: Path) -> None:
@@ -48,7 +43,16 @@ def safe_move(source: Path, destination: Path) -> None:
     if os.path.lexists(destination):
         raise FileConflictError(f"目标已存在，拒绝覆盖: {destination}")
     try:
-        os.rename(source, destination)
+        if os.name == "nt":
+            os.rename(source, destination)
+        else:
+            # POSIX rename replaces an existing target; link reserves the name atomically.
+            os.link(source, destination)
+            try:
+                source.unlink()
+            except OSError:
+                destination.unlink()
+                raise
     except FileExistsError as exc:
         raise FileConflictError(f"目标已存在，拒绝覆盖: {destination}") from exc
     except OSError as exc:
@@ -61,9 +65,16 @@ def safe_move(source: Path, destination: Path) -> None:
 
 
 def safe_copy(source: Path, destination: Path) -> None:
-    """无覆盖复制（copy2 保留元数据）。先检查后复制，配合串行执行。"""
-    if os.path.lexists(destination):
-        raise FileConflictError(f"目标已存在，拒绝覆盖: {destination}")
-    import shutil
-
-    shutil.copy2(source, destination)
+    """独占创建目标后复制，保留元数据；复制失败清理本次创建的残缺副本。"""
+    with source.open("rb") as incoming:
+        try:
+            outgoing = destination.open("xb")
+        except FileExistsError as exc:
+            raise FileConflictError(f"目标已存在，拒绝覆盖: {destination}") from exc
+        try:
+            with outgoing:
+                shutil.copyfileobj(incoming, outgoing)
+            shutil.copystat(source, destination)
+        except OSError:
+            destination.unlink(missing_ok=True)
+            raise

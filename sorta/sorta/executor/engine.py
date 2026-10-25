@@ -11,7 +11,6 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import os
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,6 +34,7 @@ from sorta.executor.safety import (
 from sorta.executor.schemas import ExecutionResult, OperationOutcome
 from sorta.planner.schemas import compute_plan_hash
 from sorta.planner.validator import PlanValidator
+from sorta.scanner.paths import resolve_within_root
 from sorta.scanner.registry import FileRegistry
 from sorta.scanner.scanner import Scanner
 from sorta.storage import IllegalPlanTransition, PlanStore
@@ -71,22 +71,25 @@ class ExecutionEngine:
                 raise ApprovalMismatchError(
                     "计划未入库或与审批记录不一致（plan_hash 不匹配），拒绝执行"
                 )
-            approval = self.store.get_approval(plan_hash)
-            if approval is None:
+            approval = self.store.get_approval_by_id(approval_id)
+            if (
+                approval is None
+                or approval.plan_hash != plan_hash
+                or approval.plan_id != plan_row.id
+            ):
                 raise ApprovalMismatchError(
                     "找不到与该计划内容一致的审批记录；请先确认计划（plan_hash 不匹配）"
                 )
             execution_id = execution_id_for(plan_hash, approval.id)
-            if not self.store.create_execution(execution_id, plan_row.id, plan_hash):
+            if self.store.get_execution(execution_id) is not None:
                 raise DuplicateExecutionError(
                     f"该审批已执行过（execution_id={execution_id}），拒绝重复执行"
                 )
 
-            try:
-                self._revalidate_locked(plan, plan_hash)
-            except PlanStaleError:
-                self.store.update_execution(execution_id, "failed", finished_at=time.time())
-                raise
+            if plan_row.status != "approved":
+                raise ApprovalMismatchError("计划尚未审批或已结束，请重新生成并审批计划")
+            self._revalidate_locked(plan, plan_hash)
+            self.store.create_execution(execution_id, plan_row.id, plan_hash)
             self.store.update_plan_status(plan_row.id, "executing")
 
             session = self.registry.get_session(plan.scan_id)
@@ -103,7 +106,7 @@ class ExecutionEngine:
                 )
                 try:
                     outcome = self._execute_one(plan, session, index, op, journal)
-                except SortaError as exc:
+                except (SortaError, OSError) as exc:
                     journal.mark_failed(index, str(exc))
                     failed += 1
                     outcome = OperationOutcome(
@@ -168,6 +171,23 @@ class ExecutionEngine:
         source_fingerprint = metadata_fingerprint(source_abs)
         if source_fingerprint is None:
             raise SortaError(f"源文件已消失: {record.relative_path}")
+        if op.action.value == "rmdir":
+            if record.is_regular_file or source_abs == session.root:
+                raise SortaError("只能清理已登记的空目录，不能删除文件或授权根目录")
+            source_abs = resolve_within_root(session.root, record.relative_path)
+            source_abs.rmdir()  # 系统原子拒绝非空目录，绝不递归删除。
+            journal.mark_succeeded(
+                index,
+                source_fingerprint_before=source_fingerprint,
+                dest_fingerprint_after=None,
+            )
+            return OperationOutcome(
+                operation_index=index,
+                source=record.relative_path,
+                destination=op.destination,
+                action="rmdir",
+                status="succeeded",
+            )
         if not fingerprints_match(source_abs, f"{record.size}:{record.modified_ns}"):
             raise SortaError(f"源文件在扫描后发生变化: {record.relative_path}")
 

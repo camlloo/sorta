@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, type ExecutionDetail, type PlanDetail } from "../services/api";
+import Markdown from "./Markdown";
 
 /** 签名组件：位移台账（transit ledger）。
  * 每一项操作 = 一行「源 ————→ 目标」：hover 时箭头线转为信号红、
@@ -12,6 +13,7 @@ interface Props {
   onPlanReplaced: (plan: PlanDetail) => void;
   onCanceled: () => void;
   onExecuted: (result: ExecutionDetail) => void;
+  onUndone: (result: ExecutionDetail) => void;
 }
 
 const CONFIDENCE_LABEL: Record<string, { text: string; className: string }> = {
@@ -26,6 +28,7 @@ export default function PlanPanel({
   onPlanReplaced,
   onCanceled,
   onExecuted,
+  onUndone,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [keep, setKeep] = useState<boolean[]>(plan.operations.map((o) => o.confidence !== "low"));
@@ -35,21 +38,32 @@ export default function PlanPanel({
   const [execution, setExecution] = useState<ExecutionDetail | null>(null);
 
   const executed = execution !== null;
+  const editable = ["draft", "validated", "awaiting_approval", "approved", "stale"].includes(plan.status);
+  const hasExclusions = keep.some((selected) => !selected);
+  const undone = execution?.status === "undone" || execution?.status === "partially_undone";
   const done = execution
-    ? execution.operations.filter((o) => o.status === "succeeded").length
+    ? execution.operations.filter((o) => o.status === (undone ? "undone" : "succeeded")).length
     : 0;
 
   const steps = [
     { label: "调查", detail: `${toolEvents.length} 次只读调用`, done: true },
     { label: "计划", detail: `${plan.operations.length} 项操作`, done: true },
     executed
-      ? { label: "执行", detail: `${done}/${execution!.operations.length} 完成`, done: done === execution!.operations.length }
+      ? { label: undone ? "撤销" : "执行", detail: `${done}/${execution!.operations.length} 完成`, done: done === execution!.operations.length }
       : { label: "待确认", detail: "确认前不改文件", done: false },
   ];
 
   async function run() {
     setError("");
     try {
+      if (hasExclusions) {
+        setBusy("edit");
+        const updated = await api.editPlan(plan.plan_id, {
+          keep, destinations: dests, expected_version: plan.version,
+        });
+        onPlanReplaced(updated);
+        return;
+      }
       setBusy("approve");
       const approval = await api.approvePlan(plan.plan_id, plan.version, plan.plan_hash);
       setBusy("execute");
@@ -82,12 +96,16 @@ export default function PlanPanel({
   }
 
   async function cancel() {
+    setBusy("cancel");
+    setError("");
     try {
       await api.rejectPlan(plan.plan_id);
-    } catch {
-      /* 已拒绝/不存在时忽略 */
+      onCanceled();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy("");
     }
-    onCanceled();
   }
 
   async function undo() {
@@ -96,6 +114,9 @@ export default function PlanPanel({
     try {
       setBusy("undo");
       const result = await api.undo(execution.execution_id);
+      const updated = await api.getExecution(execution.execution_id);
+      setExecution(updated);
+      onUndone(updated);
       setBusy("");
       window.alert(
         result.status === "undone"
@@ -128,16 +149,16 @@ export default function PlanPanel({
           </div>
           <div className="text-[12px] text-graphite">
             {executed ? (
-              <>已执行 / 共 {execution!.operations.length} 项</>
+              <>{undone ? "已撤销" : "已执行"} / 共 {execution!.operations.length} 项</>
             ) : (
               <>项操作 · 待确认</>
             )}
           </div>
         </div>
         {/* 阶段线 */}
-        <div className="mt-3 flex items-center gap-2 font-mono text-[10px]">
+        <div className="mt-3 flex flex-wrap items-center gap-2 font-mono text-[10px]">
           {steps.map((s, i) => (
-            <span key={s.label} className="flex items-center gap-2">
+            <span key={s.label} className="flex items-center gap-2 whitespace-nowrap">
               {i > 0 && <span className="h-px w-3 bg-rule-strong" aria-hidden />}
               <span className={s.done ? "text-ink" : "text-graphite"}>
                 {s.done ? "■" : "□"} {s.label}
@@ -152,7 +173,7 @@ export default function PlanPanel({
       )}
 
       <div className="px-6 py-4">
-        <p className="text-[12px] leading-relaxed text-graphite">{plan.summary}</p>
+        <Markdown text={plan.summary} compact />
       </div>
 
       {/* 台账主体 */}
@@ -160,9 +181,9 @@ export default function PlanPanel({
         {plan.operations.map((op, i) => {
           const execOp = execByIndex.get(i);
           const conf = CONFIDENCE_LABEL[op.confidence] ?? CONFIDENCE_LABEL.high;
-          const rowDim = editing && !keep[i];
+          const rowDim = !executed && !keep[i];
           const rowState = execOp
-            ? execOp.status === "succeeded"
+            ? ["succeeded", "undone"].includes(execOp.status)
               ? "text-verify"
               : "text-signal"
             : "";
@@ -175,11 +196,13 @@ export default function PlanPanel({
               tabIndex={0}
             >
               <div className="flex items-center gap-2">
-                {editing && !executed && (
+                {editable && !executed && (
                   <input
                     type="checkbox"
                     className="shrink-0"
                     checked={keep[i]}
+                    aria-label={`执行 ${op.source}`}
+                    disabled={busy !== ""}
                     onChange={(e) => {
                       const next = [...keep];
                       next[i] = e.target.checked;
@@ -189,7 +212,7 @@ export default function PlanPanel({
                 )}
                 {!editing && executed && (
                   <span className={`shrink-0 font-mono text-[12px] ${rowState}`}>
-                    {execOp?.status === "succeeded" ? "✓" : "✗"}
+                    {execOp?.status === "undone" ? "↩" : execOp?.status === "succeeded" ? "✓" : "✗"}
                   </span>
                 )}
                 <span
@@ -200,10 +223,10 @@ export default function PlanPanel({
                 </span>
                 <span className="ledger-arrow" aria-hidden />
                 <span className="max-w-[130px] shrink-0 truncate font-mono text-[11px] font-medium" title={op.destination}>
-                  {editing ? "" : op.destination}
+                  {editing ? "" : op.action === "rmdir" ? "删除空目录" : op.destination}
                 </span>
               </div>
-              {editing && !executed && (
+              {editing && !executed && op.action !== "rmdir" && (
                 <input
                   className="mt-2 w-full border-b border-rule-strong bg-transparent px-1 py-1 font-mono text-[11px] focus:border-signal focus:outline-none disabled:opacity-30"
                   disabled={!keep[i]}
@@ -219,7 +242,7 @@ export default function PlanPanel({
               <div className="ledger-detail">
                 <div className="pt-2 pl-6 text-[11px] leading-relaxed text-graphite">
                   <span className={`font-semibold ${conf.className}`}>
-                    [{op.action}/{op.confidence === "high" ? "高" : op.confidence === "medium" ? "中" : "低置信·默认不执行"}]
+                    [{op.action === "rmdir" ? "删除空目录" : op.action}/{op.confidence === "high" ? "高" : op.confidence === "medium" ? "中" : "低置信·默认不执行"}]
                   </span>{" "}
                   {op.reason}
                 </div>
@@ -256,9 +279,10 @@ export default function PlanPanel({
             </div>
           </div>
         ) : (
-          !executed && (
+          !executed && editable && (
             <button
               className="font-mono text-[11px] text-graphite underline-offset-2 hover:text-ink hover:underline"
+              disabled={busy !== ""}
               onClick={() => {
                 setKeep(plan.operations.map((o) => o.confidence !== "low"));
                 setDests(plan.operations.map((o) => o.destination));
@@ -317,17 +341,17 @@ export default function PlanPanel({
             <div className="flex items-baseline justify-between">
               <span
                 className={`text-[13px] font-semibold ${
-                  execution.status === "completed" ? "text-verify" : "text-signal"
+                  ["completed", "undone"].includes(execution.status) ? "text-verify" : "text-signal"
                 }`}
               >
-                {execution.status === "completed" ? "执行完成" : execution.status}
+                {execution.status === "completed" ? "执行完成" : execution.status === "undone" ? "已撤销" : execution.status === "partially_undone" ? "部分撤销" : execution.status}
               </span>
               <span className="font-mono text-[10px] text-graphite">
                 {execution.execution_id}
               </span>
             </div>
             {execution.operations
-              .filter((o) => o.status !== "succeeded")
+              .filter((o) => o.error)
               .map((o) => (
                 <div key={o.index} className="font-mono text-[10px] leading-relaxed text-signal">
                   ✗ {o.source} — {o.error}
@@ -335,22 +359,24 @@ export default function PlanPanel({
               ))}
             <button
               className="w-full border border-ink px-3 py-2.5 text-[13px] font-semibold transition-colors duration-100 hover:bg-ink hover:text-paper disabled:opacity-40"
-              disabled={busy !== ""}
+              disabled={busy !== "" || !["completed", "partial_failed"].includes(execution.status)}
               onClick={undo}
             >
               {busy === "undo" ? "撤销中…" : "↩ 撤销该批次"}
             </button>
           </div>
+        ) : !editable ? (
+          <p className="text-[12px] text-graphite">计划已结束（{plan.status}），执行及撤销详情见历史页。</p>
         ) : (
           <div className="flex gap-2">
             <button
               className="flex-1 bg-signal px-3 py-2.5 text-[13px] font-semibold text-paper transition-all duration-150 hover:bg-ink disabled:opacity-30"
               disabled={
-                plan.has_errors || plan.operations.length === 0 || busy !== "" || editing
+                (plan.has_errors && !hasExclusions) || !keep.some(Boolean) || busy !== "" || editing
               }
               onClick={run}
             >
-              {busy === "approve" || busy === "execute" ? "执行中…" : "确认并执行"}
+              {busy !== "" ? "处理中…" : hasExclusions ? "保存所选操作并预览" : "确认并执行"}
             </button>
             <button
               className="shrink-0 border border-rule px-4 py-2.5 text-[13px] font-medium transition-colors duration-100 hover:border-ink disabled:opacity-40"

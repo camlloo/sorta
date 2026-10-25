@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useWorkspace } from "../App";
 import {
   api,
   formatEpoch,
@@ -13,9 +14,12 @@ const STATUS: Record<string, { label: string; className: string }> = {
   completed: { label: "已完成", className: "text-verify" },
   partial_failed: { label: "部分失败", className: "text-signal" },
   failed: { label: "失败", className: "text-signal" },
+  undone: { label: "已撤销", className: "text-verify" },
+  partially_undone: { label: "部分撤销", className: "text-caution" },
 };
 
 export default function HistoryPage() {
+  const workspace = useWorkspace();
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
@@ -37,8 +41,13 @@ export default function HistoryPage() {
   }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    let active = true;
+    api.history()
+      .then((data) => { if (active) setHistory(data.executions); })
+      .catch((err: Error) => { if (active) setError(err.message); })
+      .finally(() => { if (active) setLoaded(true); });
+    return () => { active = false; };
+  }, []);
 
   async function openDetail(executionId: string) {
     setSelected(executionId);
@@ -57,13 +66,17 @@ export default function HistoryPage() {
     setMessage("");
     try {
       const result = await api.undo(selected);
+      await refresh();
+      setDetail(await api.getExecution(selected));
+      if (workspace.scanId) {
+        const info = await api.rescanWorkspace(workspace.scanId);
+        workspace.setWorkspace(info);
+      }
       setMessage(
         result.status === "undone"
           ? `已全部撤销（${result.operations.length} 项）。`
           : `部分撤销：${result.operations.filter((o) => o.status === "undone").length}/${result.operations.length} 项成功；冲突项已保留现场，请人工核对。`,
       );
-      await refresh();
-      await openDetail(selected);
     } catch (err) {
       setMessage((err as Error).message);
     } finally {
@@ -158,17 +171,17 @@ export default function HistoryPage() {
               <div key={op.index} className="flex items-center gap-2 border-b border-rule py-2">
                 <span
                   className={`shrink-0 font-mono text-[11px] ${
-                    op.status === "succeeded" ? "text-verify" : "text-signal"
+                    ["succeeded", "undone"].includes(op.status) ? "text-verify" : "text-signal"
                   }`}
                 >
-                  {op.status === "succeeded" ? "✓" : "✗"}
+                  {op.status === "undone" ? "↩" : op.status === "succeeded" ? "✓" : "✗"}
                 </span>
                 <span className="max-w-[140px] shrink-0 truncate text-right font-mono text-[11px]">
                   {op.source}
                 </span>
                 <span className="h-px min-w-3 flex-1 bg-rule-strong" aria-hidden />
                 <span className="max-w-[150px] shrink-0 truncate font-mono text-[11px]">
-                  {op.destination}
+                  {op.action === "rmdir" ? op.status === "undone" ? "已恢复空目录" : "删除空目录" : op.destination}
                 </span>
                 {op.error && (
                   <span className="shrink-0 font-mono text-[10px] text-signal">{op.error}</span>

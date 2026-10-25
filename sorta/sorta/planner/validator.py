@@ -59,9 +59,14 @@ class PlanValidator:
         seen_destinations = [op.destination for op in plan.operations]
         dup_sources = find_duplicate_sources(seen_sources)
         dup_destinations = find_duplicate_destinations(seen_destinations)
+        removals = {
+            os.path.normcase(op.destination): index
+            for index, op in enumerate(plan.operations)
+            if op.action.value == "rmdir"
+        }
 
         for index, op in enumerate(plan.operations):
-            issues.extend(self._validate_operation(index, op, session))
+            issues.extend(self._validate_operation(index, op, session, removals))
             if op.source_id in dup_sources:
                 issues.append(
                     ValidationIssue(
@@ -85,7 +90,9 @@ class PlanValidator:
         issues.extend(self._check_source_dest_swap(plan, session))
         return session, issues
 
-    def _validate_operation(self, index: int, op, session: ScanSession) -> list[ValidationIssue]:
+    def _validate_operation(
+        self, index: int, op, session: ScanSession, removals: dict[str, int]
+    ) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
 
         # 第 2 条：source_id 必须来自本次扫描
@@ -100,6 +107,8 @@ class PlanValidator:
                 )
             )
             return issues
+        if op.action.value == "rmdir":
+            return self._validate_directory_removal(index, op, record, session, removals)
         if not record.is_regular_file:
             issues.append(
                 ValidationIssue(
@@ -238,6 +247,33 @@ class PlanValidator:
                 )
             )
         return issues
+
+    @staticmethod
+    def _validate_directory_removal(index, op, record, session, removals):
+        def error(code, message):
+            return [
+                ValidationIssue(level="error", operation_index=index, code=code, message=message)
+            ]
+
+        if record.is_regular_file:
+            return error("SOURCE_NOT_DIRECTORY", "空目录清理不能删除文件")
+        if not same_path(record.relative_path, op.destination):
+            return error("DIRECTORY_PATH_CHANGED", "空目录清理不能修改目录路径")
+        try:
+            path = resolve_within_root(session.root, record.relative_path)
+            if path == session.root or not path.is_dir():
+                return error("SOURCE_NOT_DIRECTORY", "目录已消失或不是可清理目录")
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    child = (path / entry.name).relative_to(session.root).as_posix()
+                    child_index = removals.get(os.path.normcase(child))
+                    if not entry.is_dir(follow_symlinks=False) or child_index is None:
+                        return error("DIRECTORY_NOT_EMPTY", f"目录包含未安排清理的内容：{child}")
+                    if child_index >= index:
+                        return error("DIRECTORY_ORDER_INVALID", "必须先清理子目录，再清理父目录")
+        except (OSError, ValueError) as exc:
+            return error("DIRECTORY_UNSAFE", str(exc))
+        return []
 
     def _check_source_dest_swap(
         self, plan: ExecutionPlan, session: ScanSession

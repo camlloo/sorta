@@ -26,6 +26,8 @@ def apply_edits(plan: ExecutionPlan, *, keep: list[bool], destinations: list[str
         data = op.model_dump()
         new_destination = (destinations[index] or "").strip()
         if new_destination and new_destination != op.destination:
+            if op.action.value == "rmdir":
+                raise ValueError("空目录清理只能保留或排除，不能修改路径")
             data["destination"] = new_destination  # 非法路径在此触发 ValidationError
         operations.append(FileOperation.model_validate(data))
     return plan.model_copy(update={"operations": operations})

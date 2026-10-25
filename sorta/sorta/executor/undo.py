@@ -13,7 +13,7 @@ from pathlib import Path
 
 from sorta.errors import SortaError, UndoConflictError
 from sorta.executor.journal import OperationJournal
-from sorta.executor.safety import fingerprints_match
+from sorta.executor.safety import acquire_execution_lock, fingerprints_match, safe_move
 from sorta.executor.schemas import OperationOutcome, UndoResult
 from sorta.scanner.paths import resolve_within_root
 from sorta.storage import OperationLogRecord, PlanStore
@@ -26,6 +26,10 @@ class UndoEngine:
         self.store = store
 
     def undo_execution(self, execution_id: str) -> UndoResult:
+        with acquire_execution_lock():
+            return self._undo_execution_locked(execution_id)
+
+    def _undo_execution_locked(self, execution_id: str) -> UndoResult:
         execution = self.store.get_execution(execution_id)
         if execution is None:
             raise SortaError(f"执行批次不存在: {execution_id!r}")
@@ -75,11 +79,20 @@ class UndoEngine:
                 )
         batch_status = "undone" if conflicts == 0 else "partially_undone"
         self.store.update_plan_status(plan_row.id, batch_status)
+        self.store.update_execution(execution_id, batch_status)
         return UndoResult(execution_id=execution_id, status=batch_status, operations=outcomes)
 
     def _undo_one(self, root: Path, record: OperationLogRecord) -> None:
         dest_abs = resolve_within_root(root, record.destination_relpath)
         source_abs = resolve_within_root(root, record.source_relpath)
+        if record.action == "rmdir":
+            if os.path.lexists(source_abs):
+                raise UndoConflictError(f"目录路径已被重新占用，保留现场：{record.source_relpath}")
+            try:
+                source_abs.mkdir()
+            except OSError as exc:
+                raise SortaError(f"恢复空目录失败：{exc}") from exc
+            return
         if not fingerprints_match(dest_abs, record.dest_fingerprint_after):
             raise UndoConflictError(
                 f"目标 {record.destination_relpath} 在执行后被修改，拒绝自动撤销（保留现场）"
@@ -88,7 +101,7 @@ class UndoEngine:
             if os.path.lexists(source_abs):
                 raise UndoConflictError(f"原路径已被占用: {record.source_relpath}，拒绝覆盖")
             try:
-                os.rename(dest_abs, source_abs)
+                safe_move(dest_abs, source_abs)
             except OSError as exc:
                 raise SortaError(f"移回原位失败: {exc}") from exc
         elif record.action == "copy":

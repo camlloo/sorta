@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 
 class FileRecord(BaseModel):
-    """单个已发现普通文件的注册信息。id 只在所属 scan_id 的授权范围内有效。"""
+    """已发现文件或可清理目录；目录以 is_regular_file=False 登记。"""
 
     id: str
     scan_id: str

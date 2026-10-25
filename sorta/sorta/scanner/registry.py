@@ -75,13 +75,24 @@ class ScanSession:
         return session
 
     def upsert(
-        self, *, relative_path: str, extension: str, size: int, modified_ns: int
+        self,
+        *,
+        relative_path: str,
+        extension: str,
+        size: int,
+        modified_ns: int,
+        is_regular_file: bool = True,
     ) -> FileRecord:
         """按路径注册或刷新文件；同一路径复用 file_id，元数据以最新扫描为准。"""
         existing = self.find_by_path(relative_path)
         if existing is not None:
             updated = existing.model_copy(
-                update={"extension": extension, "size": size, "modified_ns": modified_ns}
+                update={
+                    "extension": extension,
+                    "size": size,
+                    "modified_ns": modified_ns,
+                    "is_regular_file": is_regular_file,
+                }
             )
             self.files[existing.id] = updated
             return updated
@@ -96,6 +107,7 @@ class ScanSession:
             extension=extension,
             size=size,
             modified_ns=modified_ns,
+            is_regular_file=is_regular_file,
         )
         self.files[file_id] = record
         self._by_path[os.path.normcase(relative_path)] = file_id

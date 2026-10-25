@@ -125,7 +125,7 @@ _OPERATION_SCHEMA = {
             "type": "string",
             "description": "相对根目录的目标文件路径（正斜杠分隔，禁止绝对路径与 ..）",
         },
-        "action": {"type": "string", "enum": ["move", "copy"]},
+        "action": {"type": "string", "enum": ["move", "copy", "rmdir"]},
         "reason": {
             "type": "string",
             "description": "判断依据（中文，基于真实观察到的名称/内容/类型）",
@@ -325,6 +325,8 @@ class ToolDispatcher:
         result = {
             "scan_id": page.scan_id,
             "files": [f.model_dump() for f in page.files],
+            "empty_directories": [f.model_dump() for f in page.empty_directories],
+            "directory_scan_has_more": page.directory_scan_has_more,
             "has_more": page.has_more,
             "next_cursor": page.next_cursor,
             "skipped_directories": page.skipped_directories,
@@ -363,6 +365,8 @@ class ToolDispatcher:
 
     def _read_file(self, args: ReadFileArgs) -> tuple[dict[str, Any], bool, str]:
         record, path = self.registry.resolve_path(self.session.scan_id, args.file_id)
+        if not record.is_regular_file:
+            return {"error": "目录不是可读取正文的文件"}, False, "拒绝读取目录正文"
         if not self._consented(record):
             return (
                 {

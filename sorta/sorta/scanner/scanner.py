@@ -4,7 +4,7 @@
 - 不跟随符号链接与 Windows junction，链接本身也不注册；
 - 隐藏文件/目录默认跳过（dotfile 约定 + Windows 隐藏属性）；
 - 深度与每页数量受配置上限约束，超出即报错而非静默放宽；
-- 只注册普通文件，目录不进入注册表；
+- 普通文件与可清理空目录分开返回，目录单独标记且不可按文件处理；
 - 无法读取的目录（权限不足等）跳过并在结果中如实报告。
 """
 
@@ -28,6 +28,8 @@ class ScanPage(BaseModel):
 
     scan_id: str
     files: list[FileRecord] = Field(default_factory=list)
+    empty_directories: list[FileRecord] = Field(default_factory=list)
+    directory_scan_has_more: bool = False
     has_more: bool = False
     next_cursor: str | None = None
     skipped_directories: list[str] = Field(default_factory=list)
@@ -127,14 +129,19 @@ class Scanner:
             )
             for m in page_metas
         ]
+        from sorta.scanner.directories import scan_empty_directories
+
+        directories = scan_empty_directories(session, limit=cfg.max_plan_operations)
         return ScanPage(
             scan_id=scan_id,
             files=files,
+            empty_directories=directories.directories,
+            directory_scan_has_more=directories.has_more,
             has_more=has_more,
             next_cursor=(
                 f"{scan_id}|{page_metas[-1].relative_path}" if has_more and page_metas else None
             ),
-            skipped_directories=skipped,
+            skipped_directories=sorted(set(skipped + directories.skipped)),
         )
 
     def _walk(

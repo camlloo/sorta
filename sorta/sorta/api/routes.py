@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -41,9 +41,10 @@ class ExecutionRequest(BaseModel):
 class TaskRequest(BaseModel):
     scan_id: str = Field(min_length=1)
     request: str = Field(min_length=1)
-    task_type: str = "auto"  # auto / find / ask / organize
+    task_type: Literal["auto", "find", "ask", "organize"] = "auto"
     template_id: int | None = None
     conversation_id: int | None = None
+    active_plan_id: int | None = None
 
 
 class ConversationCreateRequest(BaseModel):
@@ -367,6 +368,7 @@ def approve_plan(plan_id: int, body: ApproveRequest, request: Request) -> dict:
 class PlanRevisionRequest(BaseModel):
     instruction: str = Field(min_length=1)
     expected_version: int
+    conversation_id: int | None = None
 
 
 @plans_router.post("/api/v1/plans/{plan_id}/revisions")
@@ -383,9 +385,11 @@ def revise_plan(plan_id: int, body: PlanRevisionRequest, request: Request) -> di
             model=model,
             llm=llm,
             expected_version=body.expected_version,
+            cancel_event=cancel_event,
+            conversation_id=body.conversation_id,
         )
-        del job_id, cancel_event
         return {
+            "task_type": "organize",
             "plan_id": detail.plan_id,
             "scan_id": detail.scan_id,
             "version": detail.version,
@@ -427,17 +431,19 @@ tasks_router = APIRouter(dependencies=[Depends(require_token)])
 def create_task(body: TaskRequest, request: Request) -> dict:
     """统一任务入口：auto 分类后走 find/ask/organize，统一 Job 轮询。"""
     if body.task_type not in ("auto", "find", "ask", "organize"):
-        raise HTTPException(status_code=422, detail={
-            "code": "VALIDATION_ERROR",
-            "message": "task_type 必须是 auto/find/ask/organize 之一",
-        })
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": "task_type 必须是 auto/find/ask/organize 之一",
+            },
+        )
     model, llm = make_llm(request)
     service = request.app.state.service
     jobs = request.app.state.jobs
     privacy = request.app.state.service.get_settings()["privacy"]
 
     def _run(job_id: str, cancel_event) -> dict:
-        del job_id
         return service.run_task(
             body.scan_id,
             body.request,
@@ -448,6 +454,10 @@ def create_task(body: TaskRequest, request: Request) -> dict:
             llm=llm,
             cancel_event=cancel_event,
             conversation_id=body.conversation_id,
+            active_plan_id=body.active_plan_id,
+            on_tool_record=lambda record: jobs.add_event(
+                job_id, f"{record.name}: {record.summary}"
+            ),
         )
 
     job_id = jobs.submit("task", _run)
@@ -466,16 +476,25 @@ def stream_task(body: TaskRequest, request: Request) -> Any:
     privacy = service.get_settings()["privacy"]
 
     def gen():
-        for event in service.stream_task(
-            body.scan_id,
-            body.request,
-            task_type=body.task_type,
-            template_id=body.template_id,
-            privacy=privacy,
-            model=model,
-            llm=llm,
-            conversation_id=body.conversation_id,
-        ):
+        try:
+            for event in service.stream_task(
+                body.scan_id,
+                body.request,
+                task_type=body.task_type,
+                template_id=body.template_id,
+                privacy=privacy,
+                model=model,
+                llm=llm,
+                conversation_id=body.conversation_id,
+                active_plan_id=body.active_plan_id,
+            ):
+                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:  # SSE 已发送响应头，错误必须通过事件传递
+            event = {
+                "type": "error",
+                "code": getattr(exc, "code", "MODEL_UNAVAILABLE"),
+                "message": str(exc),
+            }
             yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")
@@ -502,12 +521,15 @@ def create_conversation(body: ConversationCreateRequest, request: Request) -> di
 def get_messages(conversation_id: int, request: Request) -> dict:
     service = request.app.state.service
     messages = service.get_messages(conversation_id)
-    conversations = {c["id"]: c for c in service.list_conversations(limit=200)}
-    conversation = conversations.get(conversation_id)
+    conversation = service.get_conversation(conversation_id)
     if conversation is None:
-        raise HTTPException(status_code=404, detail={
-            "code": "CONVERSATION_NOT_FOUND", "message": "会话不存在",
-        })
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "CONVERSATION_NOT_FOUND",
+                "message": "会话不存在",
+            },
+        )
     return {"conversation": conversation, "messages": messages}
 
 
@@ -560,8 +582,9 @@ def execute_plan(
     idempotency_key: str | None = Header(default=None),
 ) -> dict:
     del idempotency_key  # 幂等由确定性 execution_id 保证（§9）；头保留为协议占位
-    result = request.app.state.service.execute_approved(body.approval_id)
-    return result.model_dump(mode="json")
+    service = request.app.state.service
+    result = service.execute_approved(body.approval_id)
+    return service.get_execution(result.execution_id)
 
 
 @executions_router.get("/api/v1/executions/{execution_id}")
@@ -577,7 +600,14 @@ def get_execution(execution_id: str, request: Request) -> dict:
 @executions_router.post("/api/v1/executions/{execution_id}/undo")
 def undo_execution(execution_id: str, request: Request) -> dict:
     result = request.app.state.service.undo_execution(execution_id)
-    return result.model_dump(mode="json")
+    return {
+        "execution_id": result.execution_id,
+        "status": result.status,
+        "operations": [
+            {"index": op.operation_index, **op.model_dump(mode="json", exclude={"operation_index"})}
+            for op in result.operations
+        ],
+    }
 
 
 @executions_router.get("/api/v1/history")

@@ -61,7 +61,7 @@ export default function SettingsPage() {
         base_url: baseUrl,
         api_key: apiKey || undefined,
       });
-      workspace.refreshSettings();
+      await workspace.refreshSettings();
       setApiKey("");
       setKeyHint(settings.api_key_hint ?? "");
       if (andScan) {
@@ -141,7 +141,7 @@ export default function SettingsPage() {
                   base_url: baseUrl,
                   api_key: apiKey || undefined,
                 });
-                workspace.refreshSettings();
+                await workspace.refreshSettings();
                 setTestResult(await api.testConnection());
               } catch (err) {
                 setError((err as Error).message);

@@ -18,6 +18,7 @@ _DRIVE_PART = re.compile(r"^[A-Za-z]:$")
 class FileAction(StrEnum):
     MOVE = "move"
     COPY = "copy"
+    RMDIR = "rmdir"
 
 
 class Confidence(StrEnum):

@@ -60,6 +60,97 @@ body {
   @apply text-[11px] font-semibold tracking-[0.14em] uppercase text-graphite;
 }
 
+/* 回复按阅读内容排版：段落、分组与路径各有自己的节奏。 */
+.reply-markdown {
+  max-inline-size: 72ch;
+  min-inline-size: 0;
+  font-size: 14px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+.reply-markdown > * { margin-block: 0; }
+.reply-markdown > * + * { margin-block-start: 14px; }
+.reply-markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin-block-start: 26px;
+  font-weight: 650;
+  line-height: 1.5;
+  text-wrap: balance;
+}
+.reply-markdown > :first-child { margin-block-start: 0; }
+.reply-markdown h1 { font-size: 20px; }
+.reply-markdown h2 { font-size: 17px; }
+.reply-markdown :is(h3, h4, h5, h6) { font-size: 15px; }
+.reply-markdown :is(h1, h2, h3, h4, h5, h6) + * { margin-block-start: 8px; }
+.reply-markdown :is(ul, ol) { padding-inline-start: 22px; }
+.reply-markdown ul { list-style: disc; }
+.reply-markdown ol { list-style: decimal; }
+.reply-markdown li + li { margin-block-start: 8px; }
+.reply-markdown li > :is(p, ul, ol) { margin-block: 6px; }
+.reply-markdown li::marker { color: var(--color-graphite); }
+.reply-markdown strong { font-weight: 650; }
+.reply-markdown code {
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-ink) 5%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  box-decoration-break: clone;
+}
+.reply-markdown pre {
+  max-inline-size: 100%;
+  overflow-x: auto;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--color-ink) 4%, transparent);
+  line-height: 1.7;
+  white-space: pre;
+}
+.reply-markdown pre code {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow-wrap: normal;
+}
+.reply-markdown a {
+  color: var(--color-signal);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.reply-markdown blockquote {
+  border-inline-start: 1px solid var(--color-rule-strong);
+  padding-inline-start: 14px;
+  color: var(--color-graphite);
+  font-size: 13px;
+}
+.reply-markdown blockquote p { margin-block: 0; }
+.reply-markdown hr {
+  border: 0;
+  border-block-start: 1px solid var(--color-rule);
+  margin-block: 22px;
+}
+.reply-table-scroll { max-inline-size: 100%; overflow-x: auto; }
+.reply-markdown table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: start;
+}
+.reply-markdown :is(th, td) {
+  border-block-end: 1px solid var(--color-rule);
+  padding: 10px 12px;
+  text-align: start;
+  vertical-align: top;
+}
+.reply-markdown th {
+  font-weight: 650;
+  background: color-mix(in srgb, var(--color-ink) 3%, transparent);
+}
+.reply-markdown--compact { font-size: 12px; line-height: 1.8; }
+.reply-markdown--compact :is(h1, h2, h3, h4, h5, h6) {
+  margin-block-start: 18px;
+  font-size: 13px;
+}
+.reply-markdown--compact > :first-child { margin-block-start: 0; }
+
 /* 执行中的走线：面板顶部 1px 红线循环推进 */
 @keyframes sorta-marquee {
   0% {

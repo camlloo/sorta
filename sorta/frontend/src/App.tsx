@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { NavLink, Route, Routes, useNavigate } from "react-router-dom";
 import {
   api,
@@ -88,6 +88,7 @@ export default function App() {
   const [bootError, setBootError] = useState("");
   const [booted, setBooted] = useState(false);
   const navigate = useNavigate();
+  const fileRequest = useRef(0);
 
   useEffect(() => {
     bootstrapSession()
@@ -111,7 +112,9 @@ export default function App() {
   }, []);
 
   const refreshFiles = useCallback(async (scanId: string) => {
+    const requestId = ++fileRequest.current;
     const data = await api.listFiles(scanId);
+    if (requestId !== fileRequest.current) return;
     setState((s) => ({ ...s, scanId, files: data.files, fileCount: data.count }));
   }, []);
 
@@ -130,15 +133,17 @@ export default function App() {
         scanId: info.scan_id,
         root: info.root,
         fileCount: info.file_count,
+        files: [],
         hasMore: info.has_more ?? false,
         skippedDirectories: info.skipped_directories ?? [],
       }));
-      void refreshFiles(info.scan_id);
+      void refreshFiles(info.scan_id).catch(() => undefined);
     },
     [refreshFiles],
   );
 
   const clearWorkspace = useCallback(() => {
+    fileRequest.current += 1;
     localStorage.removeItem("sorta_scan_id");
     setState((s) => ({ ...s, scanId: null, files: [], fileCount: 0 }));
   }, []);
@@ -158,9 +163,19 @@ export default function App() {
   // 启动时若存在已持久化的扫描会话，尝试恢复文件列表；过期则清除
   useEffect(() => {
     if (state.scanId && state.settingsLoaded) {
-      refreshFiles(state.scanId).catch(() => {
-        localStorage.removeItem("sorta_scan_id");
-        setState((s) => ({ ...s, scanId: null, files: [], fileCount: 0 }));
+      const savedScanId = state.scanId;
+      refreshFiles(savedScanId).catch(async (err: Error & { status?: number }) => {
+        if (localStorage.getItem("sorta_scan_id") !== savedScanId) return;
+        // 快照过期可以对已授权目录重新扫描；网络瞬断不能清掉工作区和会话。
+        if (err.status === 410) {
+          try {
+            const info = await api.rescanWorkspace(savedScanId);
+            if (localStorage.getItem("sorta_scan_id") === savedScanId) setWorkspace(info);
+          } catch (scanError) {
+            if ((scanError as { status?: number }).status === 400 ||
+                (scanError as { status?: number }).status === 410) clearWorkspace();
+          }
+        }
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -170,32 +185,32 @@ export default function App() {
     <WorkspaceContext.Provider
       value={{ ...state, setWorkspace, refreshFiles, clearWorkspace, refreshSettings }}
     >
-      <div className="flex h-full">
+      <div className="flex h-full flex-col md:flex-row">
         {/* 左栏：品牌 / 导航 / 索引计数器。当前项靠 3px 信号红条 + 字重声明。 */}
-        <aside className="flex w-[220px] shrink-0 flex-col border-r border-rule">
-          <div className="px-6 pt-8 pb-6">
+        <aside className="flex w-full shrink-0 items-center border-b border-rule md:w-[220px] md:flex-col md:items-stretch md:border-r md:border-b-0">
+          <div className="px-4 py-3 md:px-6 md:pt-8 md:pb-6">
             <div
               className="text-[28px] leading-none font-extrabold tracking-[-0.04em]"
               style={{ fontWeight: 850 }}
             >
               SORTA
             </div>
-            <div className="mt-2 font-mono text-[10px] tracking-[0.18em] text-graphite">
+            <div className="mt-2 hidden font-mono text-[10px] tracking-[0.18em] text-graphite md:block">
               AI FILE ORGANIZER
             </div>
-            <div className="mt-1 font-mono text-[10px] tracking-[0.18em] text-graphite">
+            <div className="mt-1 hidden font-mono text-[10px] tracking-[0.18em] text-graphite md:block">
               / LOCAL
             </div>
           </div>
 
-          <nav className="flex flex-col" aria-label="主导航">
+          <nav className="flex md:flex-col" aria-label="主导航">
             {NAV.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 end={item.to === "/"}
                 className={({ isActive }) =>
-                  `group relative border-b border-rule py-3 pr-4 pl-6 text-[15px] transition-colors duration-100 ${
+                  `group relative border-rule px-3 py-3 text-[15px] transition-colors duration-100 md:border-b md:pr-4 md:pl-6 ${
                     isActive
                       ? "bg-ink font-semibold text-paper"
                       : "font-medium text-ink hover:bg-ink hover:text-paper"
@@ -218,7 +233,7 @@ export default function App() {
           </nav>
 
           {/* 索引计数器：大 mono 数字是文件库状态的客观陈述 */}
-          <div className="mt-auto px-6 pb-4">
+          <div className="mt-auto hidden px-6 pb-4 md:block">
             <div className="eyebrow">已索引</div>
             {state.scanId ? (
               <>
@@ -262,7 +277,7 @@ export default function App() {
             aria-label="设置"
             title="设置"
             className={({ isActive }) =>
-              `group relative flex h-12 w-12 items-center justify-center border-t border-rule transition-colors duration-100 ${
+              `group relative ml-auto flex h-12 w-12 shrink-0 items-center justify-center border-rule transition-colors duration-100 md:ml-0 md:border-t ${
                 isActive ? "bg-ink text-paper" : "text-graphite hover:bg-ink hover:text-paper"
               }`
             }
@@ -281,7 +296,7 @@ export default function App() {
           </NavLink>
         </aside>
 
-        <main className="min-w-0 flex-1 overflow-y-auto">
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           {!booted ? (
             <div className="p-8 font-mono text-xs text-graphite">正在连接 SORTA 服务…</div>
           ) : bootError ? (

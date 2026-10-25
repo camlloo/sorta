@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from sorta.errors import (
@@ -20,6 +20,7 @@ from sorta.errors import (
     ScanSessionError,
     SortaError,
 )
+from sorta.locking import acquire_execution_lock
 from sorta.models import FileRecord
 from sorta.scanner.registry import ScanSession
 from sorta.storage.models import (
@@ -123,16 +124,17 @@ class PlanStore:
                         extension=record.extension,
                         size=record.size,
                         modified_ns=record.modified_ns,
+                        is_regular_file=record.is_regular_file,
                     )
                 )
 
-    def load_session(self, scan_id: str) -> ScanSession:
+    def load_session(self, scan_id: str, *, allow_expired: bool = False) -> ScanSession:
         """重建内存会话；不存在或已过期抛 ScanSessionError。"""
         with Session(self._engine) as db:
             row = db.get(ScanSessionRow, scan_id)
             if row is None:
                 raise ScanSessionError(f"扫描会话不存在: {scan_id!r}")
-            if time.time() > row.expires_at:
+            if not allow_expired and time.time() > row.expires_at:
                 raise ScanSessionError(f"扫描会话已过期: {scan_id!r}，请重新扫描")
             records = db.scalars(
                 select(FileRegistryRow).where(FileRegistryRow.scan_id == scan_id)
@@ -145,6 +147,7 @@ class PlanStore:
                     extension=r.extension,
                     size=r.size,
                     modified_ns=r.modified_ns,
+                    is_regular_file=r.is_regular_file,
                 )
                 for r in records
             ]
@@ -198,7 +201,7 @@ class PlanStore:
 
         返回新版本号。new_plan_hash 若与其他计划行冲突则拒绝（内容完全相同的计划）。
         """
-        with Session(self._engine) as db, db.begin():
+        with acquire_execution_lock(), Session(self._engine) as db, db.begin():
             row = db.get(PlanRow, plan_id)
             if row is None:
                 raise PlanNotFoundError(f"计划不存在: plan_id={plan_id}")
@@ -207,16 +210,30 @@ class PlanStore:
                     f"计划版本已变化（当前 v{row.version}，请求基于 v{expected_version}）",
                     current_version=row.version,
                 )
+            if row.status not in {"draft", "validated", "awaiting_approval", "approved", "stale"}:
+                raise IllegalPlanTransition(f"计划状态为 {row.status!r}，不能继续编辑")
             clash = db.scalar(
                 select(PlanRow).where(PlanRow.plan_hash == new_plan_hash, PlanRow.id != plan_id)
             )
             if clash is not None:
                 raise SortaError("编辑后的计划与另一份既有计划内容相同，拒绝覆盖")
-            row.plan_json = plan_json
-            row.plan_hash = new_plan_hash
-            row.version = expected_version + 1
-            row.status = "draft"
-            return row.version
+            changed = db.execute(
+                update(PlanRow)
+                .where(PlanRow.id == plan_id, PlanRow.version == expected_version)
+                .values(
+                    plan_json=plan_json,
+                    plan_hash=new_plan_hash,
+                    version=expected_version + 1,
+                    status="draft",
+                )
+            )
+            if changed.rowcount != 1:
+                raise PlanVersionConflictError(
+                    "计划版本已变化，请刷新后重试", current_version=expected_version + 1
+                )
+            # 即使修改未改变 hash，旧审批也必须失效。
+            db.execute(delete(ApprovalRow).where(ApprovalRow.plan_id == plan_id))
+            return expected_version + 1
 
     def get_plan_by_hash(self, plan_hash: str) -> PlanRecord | None:
         with Session(self._engine) as db:
