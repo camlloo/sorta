@@ -45,6 +45,30 @@ class TaskRequest(BaseModel):
     template_id: int | None = None
 
 
+class TaskbookAnalyzeRequest(BaseModel):
+    file_id: str = Field(min_length=1)
+    confirm_content_access: bool = False
+
+
+class DeliverySelection(BaseModel):
+    item: str = ""
+    file_id: str
+
+
+class DeliveryPlanRequest(BaseModel):
+    selections: list[DeliverySelection] = Field(min_length=1)
+    target_dir: str = "交付材料"
+
+
+class ArchiveDuplicatesRequest(BaseModel):
+    file_ids: list[str] = Field(min_length=1)
+    archive_dir: str = "重复文件归档"
+
+
+class OcrRequest(BaseModel):
+    confirm_content_access: bool = False
+
+
 class TemplateCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     instruction: str = Field(min_length=1)
@@ -62,6 +86,7 @@ class SettingsRequest(BaseModel):
     model: str | None = None
     base_url: str | None = None
     api_key: str | None = None
+    vision_model: str | None = None
 
 
 # ---- system（health/session 免鉴权；settings 需鉴权） -------------------------
@@ -191,6 +216,7 @@ def put_settings(body: SettingsRequest, request: Request) -> dict:
         model=body.model,
         base_url=body.base_url,
         api_key=body.api_key,
+        vision_model=body.vision_model,
     )
 
 
@@ -265,6 +291,68 @@ def file_summary(
 @workspaces_router.post("/api/v1/scans/{scan_id}/duplicates")
 def find_duplicates(scan_id: str, request: Request) -> dict:
     return request.app.state.service.find_duplicates(scan_id)
+
+
+@workspaces_router.post("/api/v1/scans/{scan_id}/duplicates/archive")
+def archive_duplicates(body: ArchiveDuplicatesRequest, scan_id: str, request: Request) -> dict:
+    """为确认归档的重复副本生成 move 计划（沿用审批/执行/撤销，EXT-05）。"""
+    record = request.app.state.service.build_archive_plan(
+        scan_id, body.file_ids, archive_dir=body.archive_dir
+    )
+    return {
+        "plan_id": record.id,
+        "version": record.version,
+        "plan_hash": record.plan_hash,
+    }
+
+
+@workspaces_router.post("/api/v1/scans/{scan_id}/taskbook/analyze")
+def analyze_taskbook(
+    body: TaskbookAnalyzeRequest, scan_id: str, request: Request
+) -> dict:
+    """任务书交付清单分析与候选匹配（EXT-03）。正文上云走隐私门。"""
+    model, llm = make_llm(request)
+    return request.app.state.service.analyze_taskbook(
+        scan_id,
+        body.file_id,
+        llm=llm,
+        model=model,
+        confirm_content_access=body.confirm_content_access,
+    )
+
+
+@workspaces_router.post("/api/v1/scans/{scan_id}/delivery-plan")
+def build_delivery_plan(body: DeliveryPlanRequest, scan_id: str, request: Request) -> dict:
+    """按确认的交付材料生成复制计划（EXT-03，原件不动）。"""
+    record = request.app.state.service.build_delivery_plan(
+        scan_id,
+        [s.model_dump() for s in body.selections],
+        target_dir=body.target_dir,
+    )
+    return {
+        "plan_id": record.id,
+        "version": record.version,
+        "plan_hash": record.plan_hash,
+    }
+
+
+@workspaces_router.post("/api/v1/scans/{scan_id}/files/{file_id}/ocr")
+def ocr_file(body: OcrRequest, scan_id: str, file_id: str, request: Request) -> dict:
+    """图片 OCR（EXT-06）：发送云端视觉模型；未配置视觉模型时 503。"""
+    cfg = request.app.state.service.get_llm_config()
+    if not cfg["vision_model"]:
+        raise HTTPException(status_code=503, detail={
+            "code": "MODEL_UNAVAILABLE",
+            "message": "视觉模型未配置：请在「设置」中填写视觉模型（如 qwen-vl-plus）后再使用 OCR",
+        })
+    model, llm = make_llm(request)
+    return request.app.state.service.ocr_file(
+        scan_id,
+        file_id,
+        llm=llm,
+        vision_model=cfg["vision_model"],
+        confirm_content_access=body.confirm_content_access,
+    )
 
 
 # ---- 计划与 Job（示意图 ⑥ 执行计划面板） --------------------------------------

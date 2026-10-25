@@ -9,6 +9,7 @@ import {
 } from "./services/api";
 import ChatPage from "./pages/ChatPage";
 import FilesPage from "./pages/FilesPage";
+import PackPage from "./pages/PackPage";
 import HistoryPage from "./pages/HistoryPage";
 import SettingsPage from "./pages/SettingsPage";
 
@@ -151,6 +152,7 @@ export default function App() {
             {[
               { to: "/", label: "对话", icon: "💬" },
               { to: "/files", label: "文件库", icon: "🗂️" },
+              { to: "/pack", label: "交付", icon: "📦" },
               { to: "/history", label: "历史", icon: "📜" },
               { to: "/settings", label: "设置", icon: "⚙️" },
             ].map((item) => (
@@ -203,6 +205,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<ChatPage />} />
               <Route path="/files" element={<FilesPage />} />
+              <Route path="/pack" element={<PackPage />} />
               <Route path="/history" element={<HistoryPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>

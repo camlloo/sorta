@@ -12,6 +12,7 @@ export default function SettingsPage() {
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [visionModel, setVisionModel] = useState("");
   const [keyHint, setKeyHint] = useState("");
   const [busy, setBusy] = useState<"" | "save" | "scan" | "test">("");
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
@@ -27,6 +28,7 @@ export default function SettingsPage() {
         setModel(s.model);
         setBaseUrl(s.base_url);
         setKeyHint(s.api_key_hint ?? "");
+        setVisionModel(s.vision_model ?? "");
       })
       .catch((err: Error) => setError(err.message));
   }, []);
@@ -43,6 +45,7 @@ export default function SettingsPage() {
         model,
         base_url: baseUrl,
         api_key: apiKey || undefined,
+        vision_model: visionModel,
       });
       workspace.refreshSettings();
       setApiKey("");
@@ -102,6 +105,17 @@ export default function SettingsPage() {
             密钥仅保存在本机数据目录，不会回显、不会上传；留空表示保持现有密钥。
           </p>
         </div>
+        <div>
+          <label className="block text-xs text-neutral-500">
+            视觉模型（OCR 用，可选；如 qwen-vl-plus，需与上方接口兼容）
+          </label>
+          <input
+            className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 font-mono text-sm focus:border-neutral-500 focus:outline-none"
+            placeholder="留空表示不启用 OCR"
+            value={visionModel}
+            onChange={(e) => setVisionModel(e.target.value)}
+          />
+        </div>
       </div>
 
       <div className="mt-4 flex items-center gap-2">
@@ -117,6 +131,7 @@ export default function SettingsPage() {
                 model,
                 base_url: baseUrl,
                 api_key: apiKey || undefined,
+                vision_model: visionModel,
               });
               workspace.refreshSettings();
               setTestResult(await api.testConnection());

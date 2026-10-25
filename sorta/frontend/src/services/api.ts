@@ -124,6 +124,7 @@ export interface Settings {
   base_url: string;
   has_api_key: boolean;
   api_key_hint: string;
+  vision_model: string;
   scan_session_ttl_seconds: number;
   database_url: string;
 }
@@ -198,9 +199,36 @@ export const api = {
       body: JSON.stringify({ confirm_content_access: confirmContentAccess }),
     }),
   findDuplicates: (scanId: string) =>
-    request<{ groups: string[][]; checked: number; skipped: number }>(
-      `/api/v1/scans/${scanId}/duplicates`,
-      { method: "POST" },
+    request<DuplicateReport>(`/api/v1/scans/${scanId}/duplicates`, { method: "POST" }),
+  archiveDuplicates: (scanId: string, fileIds: string[]) =>
+    request<{ plan_id: number; version: number; plan_hash: string }>(
+      `/api/v1/scans/${scanId}/duplicates/archive`,
+      { method: "POST", body: JSON.stringify({ file_ids: fileIds }) },
+    ),
+  analyzeTaskbook: (scanId: string, fileId: string, confirmContentAccess = false) =>
+    request<TaskbookAnalysis>(`/api/v1/scans/${scanId}/taskbook/analyze`, {
+      method: "POST",
+      body: JSON.stringify({ file_id: fileId, confirm_content_access: confirmContentAccess }),
+    }),
+  buildDeliveryPlan: (
+    scanId: string,
+    selections: { item: string; file_id: string }[],
+    targetDir = "交付材料",
+  ) =>
+    request<{ plan_id: number; version: number; plan_hash: string }>(
+      `/api/v1/scans/${scanId}/delivery-plan`,
+      {
+        method: "POST",
+        body: JSON.stringify({ selections, target_dir: targetDir }),
+      },
+    ),
+  ocrFile: (scanId: string, fileId: string, confirmContentAccess = false) =>
+    request<{ text: string; source: string; model: string }>(
+      `/api/v1/scans/${scanId}/files/${fileId}/ocr`,
+      {
+        method: "POST",
+        body: JSON.stringify({ confirm_content_access: confirmContentAccess }),
+      },
     ),
   rescanWorkspace: (scanId: string) =>
     request<WorkspaceInfo>(`/api/v1/scans/${scanId}/rescan`, { method: "POST" }),
@@ -286,6 +314,7 @@ export const api = {
     model?: string;
     base_url?: string;
     api_key?: string;
+    vision_model?: string;
   }) => request<Settings>("/api/v1/settings", { method: "PUT", body: JSON.stringify(body) }),
 };
 
@@ -302,6 +331,43 @@ export interface ConnectionTestResult {
   model: string;
   base_url: string;
   checks: { chat: ConnectionCheck; tools: ConnectionCheck };
+}
+
+export interface DuplicateGroup {
+  files: string[];
+  file_ids: Record<string, string>;
+  size: number;
+  wasted_bytes: number;
+  keep: string;
+}
+
+export interface DuplicateReport {
+  groups: DuplicateGroup[];
+  checked: number;
+  skipped: number;
+  hashed: number;
+  total_wasted_bytes: number;
+  note: string;
+}
+
+export interface TaskbookCandidate {
+  file_id: string;
+  path: string;
+  reason: string;
+}
+
+export interface TaskbookItem {
+  item: string;
+  keywords: string[];
+  verification: string;
+  status: "FOUND" | "MISSING" | "NEEDS_VERIFICATION";
+  candidates: TaskbookCandidate[];
+}
+
+export interface TaskbookAnalysis {
+  taskbook: string;
+  items: TaskbookItem[];
+  note: string;
 }
 
 export interface Template {
