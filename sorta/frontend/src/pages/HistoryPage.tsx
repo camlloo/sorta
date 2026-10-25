@@ -83,7 +83,7 @@ export default function HistoryPage() {
             <span className="text-[13px] text-graphite">个执行批次</span>
           </div>
           <p className="mt-1 font-mono text-[10px] text-graphite">
-            独立于当前扫描会话——扫描过期仍可查看历史并对无冲突批次尝试撤销。
+            扫描过期仍可查看与撤销
           </p>
         </div>
         <button
@@ -107,9 +107,7 @@ export default function HistoryPage() {
       )}
 
       {loaded && history.length === 0 && (
-        <p className="mt-8 text-[13px] text-graphite">
-          暂无执行历史——确认执行第一个整理计划后，这里会出现它的逐项台账。
-        </p>
+        <p className="mt-8 text-[13px] text-graphite">暂无执行历史。</p>
       )}
 
       {history.length > 0 && (
@@ -180,8 +178,8 @@ export default function HistoryPage() {
           </div>
           {(detail.status === "completed" || detail.status === "partial_failed") && (
             <>
-              <p className="mt-3 font-mono text-[10px] leading-relaxed text-graphite">
-                撤销为满足条件时的尽力恢复：目标未被修改且原路径空闲才移回；冲突项保留现场。
+              <p className="mt-3 font-mono text-[10px] text-graphite">
+                尽力恢复：目标未改且原路径空闲才移回
               </p>
               <button
                 className="mt-2 border border-ink px-4 py-2 text-[13px] font-semibold transition-colors duration-100 hover:bg-ink hover:text-paper disabled:opacity-40"

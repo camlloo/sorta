@@ -386,10 +386,6 @@ export default function ChatPage() {
                   <br />
                   变成秩序<span className="text-signal">.</span>
                 </h1>
-                <p className="mt-5 max-w-md text-[15px] leading-relaxed text-graphite">
-                  用自然语言查找、提问、整理本地文件。SORTA 只做只读调查，
-                  每一次移动都先成为一条可审阅的台账，经你确认才执行。
-                </p>
               </div>
 
               {/* 命令行列表：hover 整行反色 */}
@@ -410,7 +406,7 @@ export default function ChatPage() {
               </div>
               {!workspace.scanId && (
                 <p className="mt-4 font-mono text-[11px] text-graphite">
-                  先在「设置」中选择工作目录，命令即可使用。
+                  先在「设置」中选择工作目录。
                 </p>
               )}
             </div>
@@ -557,17 +553,8 @@ export default function ChatPage() {
           <div className="px-6 py-8">
             <div className="eyebrow">执行计划</div>
             <p className="mt-3 text-[13px] leading-relaxed text-graphite">
-              整理任务生成的每一项文件操作都会记入这里的台账：
-              源路径 ——→ 目标路径，附依据与置信度。
-              台账经你确认才会执行；查找与问答不会产生台账。
+              整理任务的操作台账——确认后才执行。
             </p>
-            <div className="mt-6 border-t border-rule pt-3 font-mono text-[11px] leading-relaxed text-graphite">
-              计划 v1 — 草稿
-              <br />
-              确认前 0 次文件变更
-              <br />
-              确认后 逐项记录 / 可撤销
-            </div>
           </div>
         )}
       </div>

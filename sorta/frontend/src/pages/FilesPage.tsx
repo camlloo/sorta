@@ -35,8 +35,7 @@ export default function FilesPage() {
           尚未建立索引
         </h1>
         <p className="mt-3 max-w-md text-[13px] leading-relaxed text-graphite">
-          先在「设置」中选择工作目录并扫描；或在「对话」页直接发起整理，SORTA
-          会自动扫描当前授权目录。这里只显示你授权目录的扫描结果，不做后台全盘索引。
+          在「设置」中选择目录，或在「对话」页发起整理。仅索引你授权的目录。
         </p>
       </div>
     );
@@ -284,7 +283,7 @@ export default function FilesPage() {
             disabled={busy !== ""}
             onClick={doDuplicates}
           >
-            {busy === "dup" ? "比对中…" : "按内容哈希比对 →"}
+            {busy === "dup" ? "比对中…" : "查找重复 →"}
           </button>
         </div>
         {dupGroups !== null && dupScope !== null && (
@@ -303,9 +302,7 @@ export default function FilesPage() {
                 </div>
               ))
             )}
-            <p className="pt-1 text-[10px] text-graphite">
-              仅列出，不自动删除；处理重复请发起整理任务并说明要求。
-            </p>
+            <p className="pt-1 text-[10px] text-graphite">仅列出，不删除。</p>
           </div>
         )}
       </div>

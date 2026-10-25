@@ -51,8 +51,26 @@ const NAV = [
   { to: "/", label: "对话" },
   { to: "/files", label: "文件库" },
   { to: "/history", label: "历史" },
-  { to: "/settings", label: "设置" },
 ];
+
+function GearIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
 
 export default function App() {
   const [state, setState] = useState<WorkspaceState>({
@@ -200,7 +218,7 @@ export default function App() {
           </nav>
 
           {/* 索引计数器：大 mono 数字是文件库状态的客观陈述 */}
-          <div className="mt-auto px-6 pb-6">
+          <div className="mt-auto px-6 pb-4">
             <div className="eyebrow">已索引</div>
             {state.scanId ? (
               <>
@@ -237,6 +255,30 @@ export default function App() {
               </>
             )}
           </div>
+
+          {/* 设置：左下角图标按钮（线性齿轮，hover 反色，active 红条） */}
+          <NavLink
+            to="/settings"
+            aria-label="设置"
+            title="设置"
+            className={({ isActive }) =>
+              `group relative flex h-12 w-12 items-center justify-center border-t border-rule transition-colors duration-100 ${
+                isActive ? "bg-ink text-paper" : "text-graphite hover:bg-ink hover:text-paper"
+              }`
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <span
+                  className={`absolute top-0 bottom-0 left-0 w-[3px] transition-opacity duration-100 ${
+                    isActive ? "bg-signal opacity-100" : "opacity-0"
+                  }`}
+                  aria-hidden
+                />
+                <GearIcon />
+              </>
+            )}
+          </NavLink>
         </aside>
 
         <main className="min-w-0 flex-1 overflow-y-auto">

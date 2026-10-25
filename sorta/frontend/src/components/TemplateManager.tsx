@@ -87,8 +87,8 @@ export default function TemplateManager() {
   return (
     <div>
       <div className="eyebrow">整理模板 / 可复用偏好</div>
-      <p className="mt-1 font-mono text-[10px] leading-relaxed text-graphite">
-        模板只影响生成的计划，不授予写权限；与当前指令冲突时以指令为准。
+      <p className="mt-1 font-mono text-[10px] text-graphite">
+        不授予写权限；与指令冲突时以指令为准
       </p>
 
       {loaded && templates.length === 0 && (

@@ -238,9 +238,7 @@ export default function PlanPanel({
       <div className="px-6 py-4">
         {editing ? (
           <div className="space-y-2">
-            <p className="font-mono text-[10px] text-graphite">
-              勾选保留操作；直接改写目标路径。低置信度默认不勾选。
-            </p>
+            <p className="font-mono text-[10px] text-graphite">低置信度默认不执行</p>
             <div className="flex gap-2">
               <button
                 className="flex-1 bg-ink px-3 py-2 text-[12px] font-semibold text-paper transition-colors duration-100 hover:bg-signal disabled:opacity-40"

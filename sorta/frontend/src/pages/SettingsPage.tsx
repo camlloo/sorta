@@ -123,7 +123,7 @@ export default function SettingsPage() {
               onChange={(e) => setApiKey(e.target.value)}
             />
             <p className="mt-1 font-mono text-[10px] text-graphite">
-              仅存本机数据目录，不回显、不上传；留空保持现有密钥。
+              仅存本机；留空保持现有密钥。
             </p>
           </div>
         </div>
@@ -191,10 +191,6 @@ export default function SettingsPage() {
           value={root}
           onChange={(e) => setRoot(e.target.value)}
         />
-        <p className="mt-1 font-mono text-[10px] text-graphite">
-          所有扫描与文件操作仅限该目录内；执行前必须经你确认。
-        </p>
-
         <div className="mt-4 border-t border-rule">
           {PRIVACY_MODES.map((mode) => (
             <label
@@ -246,11 +242,6 @@ export default function SettingsPage() {
       <section className="mt-10 max-w-2xl">
         <TemplateManager />
       </section>
-
-      <p className="mt-10 max-w-2xl border-t border-rule pt-3 font-mono text-[10px] leading-relaxed text-graphite">
-        扫描会话有效期 1 小时 · 数据保存在本机 SQLite，不上传 ·
-        模型配置修改即时生效 · 所有文件操作先计划后执行、可撤销
-      </p>
 
       {message && (
         <div className="mt-4 max-w-2xl border-l-2 border-verify pl-3 font-mono text-[11px] text-verify">
