@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+/* SORTA 瑞士风设计 Token（v2 文档 §5.2）：黑白灰 + 8px 网格 + 少量强调色 */
+:root {
+  --accent: #2563eb;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-white text-neutral-900 antialiased;
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    "Microsoft YaHei",
+    sans-serif;
+}
+
+h1 {
+  @apply text-3xl font-bold tracking-tight;
+}

@@ -13,7 +13,13 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from sorta.errors import SortaError
+from sorta.errors import (
+    IllegalPlanTransition,
+    PlanNotFoundError,
+    PlanVersionConflictError,
+    ScanSessionError,
+    SortaError,
+)
 from sorta.models import FileRecord
 from sorta.scanner.registry import ScanSession
 from sorta.storage.models import (
@@ -39,16 +45,13 @@ PLAN_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
-class IllegalPlanTransition(SortaError):
-    """计划状态机不允许的迁移。"""
-
-
 @dataclass(frozen=True)
 class PlanRecord:
     id: int
     scan_id: str
     plan_json: dict[str, Any]
     plan_hash: str
+    version: int
     status: str
     created_at: float
 
@@ -123,13 +126,9 @@ class PlanStore:
         with Session(self._engine) as db:
             row = db.get(ScanSessionRow, scan_id)
             if row is None:
-                from sorta.errors import ScanSessionError
-
                 raise ScanSessionError(f"扫描会话不存在: {scan_id!r}")
             if time.time() > row.expires_at:
-                from sorta.errors import ScanSessionError
-
-                raise ScanSessionError(f"扫描会话已过期: {scan_id!r}，请重新执行 plan")
+                raise ScanSessionError(f"扫描会话已过期: {scan_id!r}，请重新扫描")
             records = db.scalars(
                 select(FileRegistryRow).where(FileRegistryRow.scan_id == scan_id)
             ).all()
@@ -157,14 +156,14 @@ class PlanStore:
         with Session(self._engine) as db:
             row = db.get(ScanSessionRow, scan_id)
             if row is None:
-                from sorta.errors import ScanSessionError
-
                 raise ScanSessionError(f"扫描会话不存在: {scan_id!r}")
             return row.root_path
 
     # ---- 计划 -------------------------------------------------------------
 
-    def save_plan(self, plan_json: dict[str, Any], plan_hash: str, status: str) -> int:
+    def save_plan(
+        self, plan_json: dict[str, Any], plan_hash: str, status: str, *, version: int = 1
+    ) -> int:
         """按 hash 幂等保存，返回 plan_id。"""
         with Session(self._engine) as db, db.begin():
             existing = db.scalar(select(PlanRow).where(PlanRow.plan_hash == plan_hash))
@@ -174,12 +173,45 @@ class PlanStore:
                 scan_id=plan_json["scan_id"],
                 plan_json=plan_json,
                 plan_hash=plan_hash,
+                version=version,
                 status=status,
                 created_at=time.time(),
             )
             db.add(row)
             db.flush()
             return row.id
+
+    def update_plan_content(
+        self,
+        plan_id: int,
+        *,
+        expected_version: int,
+        plan_json: dict[str, Any],
+        new_plan_hash: str,
+    ) -> int:
+        """人工编辑计划：乐观锁校验版本，覆盖内容并 version+1（旧审批随之失效）。
+
+        返回新版本号。new_plan_hash 若与其他计划行冲突则拒绝（内容完全相同的计划）。
+        """
+        with Session(self._engine) as db, db.begin():
+            row = db.get(PlanRow, plan_id)
+            if row is None:
+                raise PlanNotFoundError(f"计划不存在: plan_id={plan_id}")
+            if row.version != expected_version:
+                raise PlanVersionConflictError(
+                    f"计划版本已变化（当前 v{row.version}，请求基于 v{expected_version}）",
+                    current_version=row.version,
+                )
+            clash = db.scalar(
+                select(PlanRow).where(PlanRow.plan_hash == new_plan_hash, PlanRow.id != plan_id)
+            )
+            if clash is not None:
+                raise SortaError("编辑后的计划与另一份既有计划内容相同，拒绝覆盖")
+            row.plan_json = plan_json
+            row.plan_hash = new_plan_hash
+            row.version = expected_version + 1
+            row.status = "draft"
+            return row.version
 
     def get_plan_by_hash(self, plan_hash: str) -> PlanRecord | None:
         with Session(self._engine) as db:
@@ -190,7 +222,7 @@ class PlanStore:
         with Session(self._engine) as db, db.begin():
             row = db.get(PlanRow, plan_id)
             if row is None:
-                raise SortaError(f"计划不存在: plan_id={plan_id}")
+                raise PlanNotFoundError(f"计划不存在: plan_id={plan_id}")
             allowed = PLAN_TRANSITIONS.get(row.status, set())
             if new_status != row.status and new_status not in allowed:
                 raise IllegalPlanTransition(
@@ -207,6 +239,15 @@ class PlanStore:
             db.flush()
             return ApprovalRecord(
                 id=row.id, plan_id=plan_id, plan_hash=plan_hash, approved_at=row.approved_at
+            )
+
+    def get_approval_by_id(self, approval_id: int) -> ApprovalRecord | None:
+        with Session(self._engine) as db:
+            row = db.get(ApprovalRow, approval_id)
+            if row is None:
+                return None
+            return ApprovalRecord(
+                id=row.id, plan_id=row.plan_id, plan_hash=row.plan_hash, approved_at=row.approved_at
             )
 
     def get_approval(self, plan_hash: str) -> ApprovalRecord | None:
@@ -355,6 +396,7 @@ class PlanStore:
             scan_id=row.scan_id,
             plan_json=row.plan_json,
             plan_hash=row.plan_hash,
+            version=row.version,
             status=row.status,
             created_at=row.created_at,
         )

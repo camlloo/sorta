@@ -3,49 +3,26 @@
 > 本地优先、自然语言驱动、可预览、可撤销的 AI 文件整理助手。
 > 完整规格见 [`SORTA_开发文档.md`](../SORTA_开发文档.md)（下称"开发文档"）。
 
-## 当前状态：M1 + M2 + M3 + M4（CLI 与图形界面双入口，核心闭环完整）
+## 当前状态：桌面版架构 D0–D3（FastAPI + React，Streamlit 已移除）
 
-M1 文件系统层（详见下方模块说明）；M2 Agent 只读调查与计划生成（不使用任何
-Agent 框架，Tool Calling 循环手写于 `agent/controller.py`）；M3 安全执行与撤销。
+在 M1–M5 完整闭环（CLI）基础上，按《SORTA_桌面版升级开发文档_v2.md》完成架构升级：
+**核心 Python 模块（agent/scanner/planner/executor/storage）不变**，新增：
 
-M3 已交付（开发文档 §7/§8/§9）：
+- `sorta/application/` — 业务服务层：`SortaService` 统一编排（扫描/计划/校验/编辑/
+  审批/执行/撤销），CLI 与 API 共用；`JobManager` 支持长耗时计划生成的轮询与取消。
+- `sorta/api/` — FastAPI 服务（仅绑定 127.0.0.1）：健康检查、会话 token 鉴权、
+  工作区/文件/计划/执行/历史/设置全部端点；统一错误码信封（§4.5）；同源托管
+  前端构建产物。
+- `frontend/` — React 18 + TypeScript + Vite + Tailwind CSS：对话（能力卡片 +
+  chat 输入 + 右侧执行计划面板：三步时间线/预览/编辑/确认取消/撤销）、文件库
+  （搜索/详情/本地预览/LLM 总结/重复检测/历史撤销）、设置（目录/隐私/模型状态）。
+  完整对齐《SORTA智能文件整理助手界面示意.png》。
+- 计划版本化：`plans.version` 乐观锁（编辑 +1、旧审批自动失效），显式迁移脚本
+  （PRAGMA user_version）。
+- **Streamlit 已移除**（应用户决策）；Tauri 2 桌面壳与 PyInstaller Sidecar 按 v2
+  文档 D4/D5 阶段实施。
 
-- `sorta/planner/validator.py` — 执行前确定性校验（§7.2 十项）：源/目标边界、
-  符号链接、重复源、重复目标（NTFS 大小写归一化）、同名目标冲突、源==目标、
-  扫描后文件变化（STALE）、Windows 保留名、互换覆盖对（A→B 且 B→A）、
-  深度/路径长度预警、操作条数上限。
-- `sorta/planner/schemas.py` — `compute_plan_hash`：规范化序列化 SHA-256，
-  人工编辑即失效既有审批——不能拿审批 A 执行计划 B。
-- `sorta/storage/` — SQLAlchemy 2.x + SQLite：`models.py`（六张表 + 外键 +
-  唯一约束）、`database.py`（`PRAGMA foreign_keys=ON` 逐连接开启）、
-  `repository.py`（PlanStore 仓储；ORM 对象不越过 storage 层）。
-- `sorta/executor/engine.py` — 审批绑定校验、进程内互斥锁、锁内重验、
-  确定性 execution_id（同一审批无法重复执行）、串行逐项执行、
-  `recover_interrupted` 崩溃恢复（按真实文件状态核对，不盲目重放）。
-- `sorta/executor/safety.py` — 无覆盖 move/copy（目标存在即拒绝）、
-  跨设备移动显式报错、大小+mtime_ns 指纹（§17.4）。
-- `sorta/executor/undo.py` — 条件撤销：目标未被修改且原路径空闲才移回；
-  copy 撤销仅删除本次创建且未改动的副本；冲突保留现场绝不覆盖（§8.3）。
-
-M4 已交付并按《SORTA智能文件整理助手界面示意.png》升级为对话式三页布局
-（`uv run sorta ui` 启动，Streamlit）：
-
-- **对话**：欢迎页 + 四张能力卡片（查找/整理/总结/其他，点击即执行示例）、
-  对话式输入（`st.chat_input`，多轮）、右侧执行计划面板——三步时间线
-  （查找文件 → 分类整理 → 等待确认/执行完成）、计划预览、编辑折叠、
-  校验问题分级展示、"确认并执行 / 取消"双按钮、执行后可撤销。
-- **文件库**：已索引文件表 + 搜索、文件详情（本地内容预览，不发送云端）、
-  **LLM 内容总结**（无工具单轮调用，文件内容仍按不可信数据处理）、
-  **哈希重复文件检测**（只列出、不删除）、执行历史与撤销。
-- **设置**：工作目录 + 隐私模式（保存并扫描，设置持久化到本地 JSON）、
-  模型与接口状态、限制项展示；侧栏常显"已索引 N 个文件"。
-- 可测试逻辑独立于 UI：`ui/logic.py`（能力卡片/时间线/回复文案/重复分组/
-  总结 prompt）、`planner/editing.py`、`executor/flows.py`、controller 的
-  `on_tool_record` 回调。
-
-M5（大规模测试集与打磨）尚未开始。
-
-## 环境要求
+## 环境要求## 环境要求
 
 - Windows 10/11（优先支持平台）；macOS/Linux 兼容性未验证
 - Python 3.12+，[uv](https://docs.astral.sh/uv/)
@@ -53,43 +30,37 @@ M5（大规模测试集与打磨）尚未开始。
 ## 快速开始
 
 ```bash
-uv sync                                  # 创建 .venv 并安装依赖
-uv run pytest                            # 运行测试
-uv run python scripts/make_test_fixture.py   # 生成模拟下载目录（可选）
-uv run sorta scan tests/fixtures/downloads    # 扫描预览（无需 API Key）
+uv sync                                   # 安装 Python 依赖
+uv run pytest                             # 运行 178 个测试
+uv run python scripts/make_test_fixture.py    # 生成模拟下载目录（可选）
+uv run sorta scan tests/fixtures/downloads    # CLI 扫描预览（无需 API Key）
 
-# 完整闭环：计划 → 校验 → 执行 → 撤销（需要 LLM API Key）
-cp .env.example .env   # 填入 SORTA_API_KEY / SORTA_MODEL（OpenAI 兼容接口）
-uv run sorta ui                             # 图形界面（推荐，无需写命令）
-uv run sorta plan --root tests/fixtures/downloads \
-  --request "把安全学习资料整理到 Security-Learning，不确定的保留原处" \
-  --output plan.json
-uv run sorta inspect-plan plan.json      # 校验预览（不执行）
-uv run sorta apply plan.json             # 交互确认后执行
-uv run sorta history                     # 执行历史
-uv run sorta undo <execution_id>         # 无冲突时尽力撤销
+# 完整闭环（需要 LLM API Key：复制 .env.example 为 .env 并填写）
+uv run sorta ui                           # 启动本地 Web 界面（127.0.0.1:8502）并打开浏览器
+# 浏览器中：设置 → 填入目录 → 保存并扫描 → 对话 → 确认执行 → 文件库撤销
+
+# CLI 全集（调用同一 Service 层）
+uv run sorta plan --root tests/fixtures/downloads --request "整理需求" --output plan.json
+uv run sorta inspect-plan plan.json       # 校验预览
+uv run sorta apply plan.json              # 交互确认后执行
+uv run sorta history && uv run sorta undo <execution_id>
+
+# 前端开发模式（可选）：cd frontend && npm install && npm run dev
+npm run build                             # 构建产物由 FastAPI 同源托管
 ```
 
 环境变量见 [`.env.example`](.env.example)；复制为 `.env` 后生效（勿提交真实密钥）。
-数据库默认 `sqlite:///sorta.db`（CWD）；删除该行则用系统数据目录
+开发版数据库默认 CWD 的 `sorta.db`；未设置 `SORTA_DB_URL` 时使用系统数据目录
 （Windows: `%APPDATA%/sorta/sorta.db`）。
 
-## 安全边界（已实现并测试覆盖）
+## 安全不变量
 
-- 未授权路径访问：相对路径解析统一走 `resolve_within_root`，绝对路径、`..`、
-  盘符相对段、符号链接/junction 越界全部拒绝（`tests/test_registry.py`、
-  `tests/test_plan_validator.py`）。
-- 未审批零变更：审批通过 `plan_hash` 精确绑定，执行前锁内重验；未审批、
-  计划被编辑、源文件被改动均拒绝执行（`tests/test_executor.py`）。
-- 无静默覆盖：目标已存在一律拒绝（逐操作失败，其余继续），undo 冲突时
-  保留现场（`tests/test_executor.py`、`tests/test_undo.py`）。
-- 重复执行防护：确定性 execution_id + 数据库主键约束，同一审批不可执行两次。
-- LLM 拿不到写接口：工具白名单之外（move/copy/delete/shell…）一律拒绝；
-  计划只能经 `submit_plan` 提交并通过结构校验、scan_id 绑定。
-- Prompt Injection：文件内容以 JSON 数据形式进入对话；执行权限完全独立于 LLM。
-- 失控调用防护：步数上限 + 工具调用总次数上限，超限中止并留审计日志。
+- 未审批零变更：审批绑定 plan_hash + version；编辑后旧审批失效；执行前锁内重验。
+- 无静默覆盖：目标存在即拒绝；undo 冲突保留现场。
+- LLM 无写接口：只读工具白名单；计划只能经 submit_plan 提交并校验。
+- API 边界：仅 loopback；会话 token 鉴权；统一错误码；未授权目录拒绝。
 
-## 质量指标（§13.3，qwen3.8-flash 实测基线 2026-10-24）
+## 已知限制## 质量指标（§13.3，qwen3.8-flash 实测基线 2026-10-24）
 
 对 56 个标注文件（`scripts/make_eval_dataset.py` 生成，含 22 个"无证据 misc"文件）
 运行 `uv run python scripts/evaluate.py --out <目录>` 的实测结果：

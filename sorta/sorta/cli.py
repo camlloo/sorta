@@ -341,16 +341,34 @@ def _cmd_undo(args: argparse.Namespace) -> int:
 
 
 def _cmd_ui(args: argparse.Namespace) -> int:
-    """启动 Streamlit 图形界面（M4）。"""
-    import subprocess
-    import sys
+    """启动本地 Web 界面：FastAPI（API + React 静态产物）+ 自动打开浏览器。"""
+    import os
+    import threading
+    import webbrowser
 
-    app_path = Path(__file__).resolve().parent / "ui" / "app.py"
-    cmd = [sys.executable, "-m", "streamlit", "run", str(app_path)]
-    if args.headless:
-        cmd += ["--server.headless", "true"]
-    print("启动图形界面…（Ctrl+C 退出）")
-    return subprocess.call(cmd)
+    import uvicorn
+
+    from sorta.api import create_app, get_api_token_file
+
+    config = _load_env_and_config()
+    app = create_app(config=config)
+    port = args.port or int(os.environ.get("SORTA_UI_PORT", "8502"))
+    token_file = get_api_token_file()
+    try:
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(app.state.api_token, encoding="utf-8")
+    except OSError:
+        pass
+
+    url = f"http://127.0.0.1:{port}"
+    print(f"SORTA Web 界面: {url}（Ctrl+C 退出）")
+    if not args.no_browser:
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+    try:
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    finally:
+        token_file.unlink(missing_ok=True)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -387,8 +405,9 @@ def main(argv: list[str] | None = None) -> int:
     p_undo.add_argument("execution_id", help="执行批次 ID（见 history）")
     p_undo.set_defaults(func=_cmd_undo)
 
-    p_ui = sub.add_parser("ui", help="启动 Streamlit 图形界面")
-    p_ui.add_argument("--headless", action="store_true", help="不自动打开浏览器")
+    p_ui = sub.add_parser("ui", help="启动本地 Web 界面（API + React 前端）")
+    p_ui.add_argument("--port", type=int, default=None, help="监听端口（默认 8502，仅 127.0.0.1）")
+    p_ui.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     p_ui.set_defaults(func=_cmd_ui)
 
     args = parser.parse_args(argv)

@@ -50,6 +50,42 @@ def init_db(engine: Engine) -> None:
     from sorta.storage.models import Base
 
     Base.metadata.create_all(engine)
+    _run_migrations(engine)
+
+
+_LATEST_SCHEMA_VERSION = 1
+
+
+def _run_migrations(engine: Engine) -> None:
+    """有版本号的显式迁移（v2 文档 §3.3）：基于 PRAGMA user_version 顺序执行。
+
+    新建库由 create_all 直接得到最新结构，迁移步骤内部需自行判断列是否存在。
+    """
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        current = conn.execute(text("PRAGMA user_version")).scalar_one()
+    while current < _LATEST_SCHEMA_VERSION:
+        target = current + 1
+        step = _MIGRATIONS.get(target)
+        if step is not None:
+            step(engine)
+        with engine.begin() as conn:
+            conn.execute(text(f"PRAGMA user_version = {target}"))
+        current = target
+
+
+def _migrate_1_add_plan_version(engine: Engine) -> None:
+    """v1：plans 表增加 version 列（桌面版 API 的乐观锁）。"""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(plans)"))}
+        if "version" not in columns:
+            conn.execute(text("ALTER TABLE plans ADD COLUMN version INTEGER NOT NULL DEFAULT 1"))
+
+
+_MIGRATIONS = {1: _migrate_1_add_plan_version}
 
 
 def _enable_sqlite_foreign_keys(engine: Engine) -> None:

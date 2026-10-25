@@ -12,16 +12,7 @@ import os
 import threading
 from pathlib import Path
 
-from sorta.errors import SortaError
-
-
-class FileConflictError(SortaError):
-    """目标已存在，拒绝覆盖（§10.3 安全不变量）。"""
-
-
-class CrossDeviceMoveError(SortaError):
-    """跨文件系统移动，MVP 不自动降级（§8.1）。"""
-
+from sorta.errors import CrossDeviceMoveError, FileConflictError
 
 _EXECUTION_LOCK = threading.Lock()
 

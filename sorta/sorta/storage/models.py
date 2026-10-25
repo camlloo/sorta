@@ -43,7 +43,11 @@ class FileRegistryRow(Base):
 
 
 class PlanRow(Base):
-    """计划及版本。plan_hash 是规范化序列化的 SHA-256，审批的绑定锚点。"""
+    """计划及版本。plan_hash 是规范化序列化的 SHA-256，审批的绑定锚点。
+
+    version 从 1 起递增：每次人工编辑 +1 并生成新 plan_hash，旧审批随之失效
+    （v2 桌面版 API 的乐观锁依据）。
+    """
 
     __tablename__ = "plans"
 
@@ -53,6 +57,7 @@ class PlanRow(Base):
     )
     plan_json: Mapped[dict] = mapped_column(JSON)
     plan_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    version: Mapped[int] = mapped_column(default=1)
     status: Mapped[str] = mapped_column(String(32), default="draft")
     created_at: Mapped[float] = mapped_column(BigInteger)
 

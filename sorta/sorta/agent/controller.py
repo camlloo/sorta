@@ -24,7 +24,7 @@ from sorta.agent.prompts import build_system_prompt, build_user_message
 from sorta.agent.schemas import ExecutionPlan
 from sorta.agent.tools import PLAN_TOOL, ConsentCallback, ToolCallRecord, ToolDispatcher
 from sorta.config import SortaConfig
-from sorta.errors import SortaError
+from sorta.errors import OperationCanceledError, SortaError
 from sorta.scanner.registry import FileRegistry
 from sorta.scanner.scanner import Scanner
 
@@ -67,8 +67,19 @@ class AgentController:
         self.consent_callback = consent_callback
         self.on_tool_record = on_tool_record  # 每次工具调用完成后的回调（UI 实时日志用）
 
-    def run(self, root: str | Path, request: str, *, model: str) -> AgentRunResult:
-        """执行一次完整调查并返回计划。只读；不改任何文件。"""
+    def run(
+        self,
+        root: str | Path,
+        request: str,
+        *,
+        model: str,
+        cancel_event: Any = None,
+    ) -> AgentRunResult:
+        """执行一次完整调查并返回计划。只读；不改任何文件。
+
+        cancel_event 置位后在下一次模型调用前抛 OperationCanceledError
+        （v2 API §4.4：取消 = 停止接下来的工作）。
+        """
         session = self.registry.create_session(Path(root))
         dispatcher = ToolDispatcher(
             registry=self.registry,
@@ -86,6 +97,8 @@ class AgentController:
         plan: ExecutionPlan | None = None
         steps_used = 0
         for _ in range(self.config.max_agent_steps):
+            if cancel_event is not None and cancel_event.is_set():
+                raise OperationCanceledError("调查已被用户取消")
             steps_used += 1
             response = self.llm.chat(model=model, messages=messages, tools=dispatcher.specs)
             if not response.tool_calls:

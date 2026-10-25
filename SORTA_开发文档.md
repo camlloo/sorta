@@ -474,11 +474,14 @@ MVP 使用 SQLite 作为嵌入式存储引擎，统一通过 **SQLAlchemy 2.x**�
 
 ## 11. 用户界面设计
 
-MVP 先支持 CLI，完整闭环通过后再加入 Streamlit。（均已实现。图形界面
-`uv run sorta ui` 启动，已按《SORTA智能文件整理助手界面示意.png》升级为
-对话式三页布局：**对话**（能力卡片 + 对话输入 + 右侧执行计划面板 + 确认/取消）、
-**文件库**（索引表/详情/本地预览/LLM 总结/重复检测/执行历史与撤销）、
-**设置**（工作目录/隐私模式/模型状态，设置持久化）。业务逻辑与 CLI 共用。）
+> **2026-10-25 更新**：应用户要求，Streamlit 界面已全面移除，前端统一采用
+> **React + TypeScript + Vite + Tailwind CSS**。架构遵循《SORTA_桌面版升级
+> 开发文档_v2.md》：业务编排抽取为 `sorta/application/`（SortaService + Job），
+> API 层为 `sorta/api/`（FastAPI，仅绑定 127.0.0.1，会话 token 鉴权），前端
+> 在 `frontend/`（构建产物由 FastAPI 同源托管）。`uv run sorta ui` 启动本地
+> Web 界面并自动打开浏览器。原 CLI 全部保留，通过同一 Service 层调用。
+> 三页布局（对话/文件库/设置）与执行计划面板按界面示意图实现；Tauri 2
+> 桌面壳按 v2 文档 D4/D5 阶段另行实施。
 
 ### 11.1 页面/区域
 
@@ -539,10 +542,11 @@ sorta/
 │   │   ├── journal.py
 │   │   └── undo.py
 │   ├── storage/
-│   │   ├── database.py       # SQLAlchemy Engine/Session 工厂、建表与初始化
+│   │   ├── database.py       # SQLAlchemy Engine/Session 工厂、建表与迁移
 │   │   └── models.py         # SQLAlchemy ORM 表模型与约束
-│   └── ui/
-│       └── app.py
+│   ├── application/          # v2：业务服务层（SortaService + Job 管理）
+│   ├── api/                  # v2：FastAPI 入口与路由
+│   └── cli.py
 ├── tests/
 │   ├── fixtures/
 │   ├── test_scanner.py

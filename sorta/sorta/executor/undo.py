@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from sorta.errors import SortaError
+from sorta.errors import SortaError, UndoConflictError
 from sorta.executor.journal import OperationJournal
 from sorta.executor.safety import fingerprints_match
 from sorta.executor.schemas import OperationOutcome, UndoResult
@@ -81,12 +81,12 @@ class UndoEngine:
         dest_abs = resolve_within_root(root, record.destination_relpath)
         source_abs = resolve_within_root(root, record.source_relpath)
         if not fingerprints_match(dest_abs, record.dest_fingerprint_after):
-            raise SortaError(
+            raise UndoConflictError(
                 f"目标 {record.destination_relpath} 在执行后被修改，拒绝自动撤销（保留现场）"
             )
         if record.action == "move":
             if os.path.lexists(source_abs):
-                raise SortaError(f"原路径已被占用: {record.source_relpath}，拒绝覆盖")
+                raise UndoConflictError(f"原路径已被占用: {record.source_relpath}，拒绝覆盖")
             try:
                 os.rename(dest_abs, source_abs)
             except OSError as exc:

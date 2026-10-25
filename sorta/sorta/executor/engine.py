@@ -17,7 +17,12 @@ from pathlib import Path
 
 from sorta.agent.schemas import ExecutionPlan
 from sorta.config import SortaConfig
-from sorta.errors import SortaError
+from sorta.errors import (
+    ApprovalMismatchError,
+    DuplicateExecutionError,
+    PlanStaleError,
+    SortaError,
+)
 from sorta.executor.journal import OperationJournal
 from sorta.executor.safety import (
     acquire_execution_lock,
@@ -33,18 +38,6 @@ from sorta.planner.validator import PlanValidator
 from sorta.scanner.registry import FileRegistry
 from sorta.scanner.scanner import Scanner
 from sorta.storage import IllegalPlanTransition, PlanStore
-
-
-class ApprovalMismatchError(SortaError):
-    """计划内容与审批记录的 plan_hash 不一致（§7.3）。"""
-
-
-class DuplicateExecutionError(SortaError):
-    """同一审批已被执行过（确定性 execution_id 已存在）。"""
-
-
-class PlanStaleError(SortaError):
-    """执行前重验发现 error 级问题，计划进入 STALE。"""
 
 
 def execution_id_for(plan_hash: str, approval_id: int) -> str:
