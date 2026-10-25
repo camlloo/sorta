@@ -55,6 +55,7 @@ export default function App() {
     settingsLoaded: false,
   });
   const [bootError, setBootError] = useState("");
+  const [booted, setBooted] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -70,8 +71,12 @@ export default function App() {
           privacy: settings.privacy,
           settingsLoaded: true,
         }));
+        setBooted(true);
       })
-      .catch((err: Error) => setBootError(err.message));
+      .catch((err: Error) => {
+        setBootError(err.message);
+        setBooted(true);
+      });
   }, []);
 
   const refreshFiles = useCallback(async (scanId: string) => {
@@ -190,7 +195,9 @@ export default function App() {
           </div>
         </aside>
         <main className="min-w-0 flex-1 overflow-y-auto">
-          {bootError ? (
+          {!booted ? (
+            <div className="p-8 text-sm text-neutral-400">正在连接 SORTA 服务…</div>
+          ) : bootError ? (
             <div className="p-8 text-red-600">无法连接 SORTA 服务：{bootError}</div>
           ) : (
             <Routes>

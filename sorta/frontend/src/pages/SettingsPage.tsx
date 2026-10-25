@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useWorkspace } from "../App";
-import { api } from "../services/api";
+import { api, type ConnectionTestResult } from "../services/api";
 
 /** 示意图 ③ 设置页：工作目录授权 + 隐私模式 + LLM 模型配置（兼容 OpenAI 接口）。 */
 
@@ -12,7 +12,8 @@ export default function SettingsPage() {
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [keyHint, setKeyHint] = useState("");
-  const [busy, setBusy] = useState<"" | "save" | "scan">("");
+  const [busy, setBusy] = useState<"" | "save" | "scan" | "test">("");
+  const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -101,6 +102,57 @@ export default function SettingsPage() {
           </p>
         </div>
       </div>
+
+      <div className="mt-4 flex items-center gap-2">
+        <button
+          className="rounded border border-neutral-300 px-4 py-2 text-sm disabled:opacity-50"
+          disabled={busy !== "" || model.trim() === "" || apiKey === "" && keyHint === ""}
+          onClick={async () => {
+            setBusy("test");
+            setError("");
+            try {
+              // 先保存再测试：测试始终使用当前已保存的配置
+              await api.saveSettings({
+                model,
+                base_url: baseUrl,
+                api_key: apiKey || undefined,
+              });
+              workspace.refreshSettings();
+              setTestResult(await api.testConnection());
+            } catch (err) {
+              setError((err as Error).message);
+            } finally {
+              setBusy("");
+            }
+          }}
+        >
+          {busy === "test" ? "测试中…" : "🔌 测试连接"}
+        </button>
+        <span className="text-xs text-neutral-400">
+          只发送最小测试请求（不包含你的文件），可能产生少量模型调用费用。
+        </span>
+      </div>
+      {testResult && (
+        <div className="mt-3 max-w-xl space-y-1 rounded border border-neutral-200 p-3 text-xs">
+          <div className={testResult.ok ? "font-semibold text-green-700" : "font-semibold text-red-700"}>
+            {testResult.ok
+              ? "✓ 连接正常，规划功能可用"
+              : testResult.checks.chat.ok
+                ? "⚠ 连接正常，但规划功能不可用（工具调用不兼容）"
+                : "✗ 连接失败"}
+            <span className="ml-1 text-neutral-400">模型 {testResult.model}</span>
+          </div>
+          <div className={testResult.checks.chat.ok ? "text-neutral-600" : "text-red-600"}>
+            对话：{testResult.checks.chat.message}（{testResult.checks.chat.latency_ms} ms）
+            {testResult.checks.chat.code && ` [${testResult.checks.chat.code}]`}
+          </div>
+          <div className={testResult.checks.tools.ok ? "text-neutral-600" : "text-red-600"}>
+            工具调用：{testResult.checks.tools.message}（{testResult.checks.tools.latency_ms} ms）
+            {testResult.checks.tools.code && ` [${testResult.checks.tools.code}]`}
+            {!testResult.checks.tools.ok && " —— 该端点无法用于自动整理，请更换兼容 OpenAI 工具调用的服务"}
+          </div>
+        </div>
+      )}
 
       <h2 className="mt-8 text-sm font-bold">工作目录</h2>
       <label className="mt-2 block text-xs text-neutral-500">授权根目录</label>

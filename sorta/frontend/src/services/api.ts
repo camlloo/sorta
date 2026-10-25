@@ -219,6 +219,8 @@ export const api = {
     request<ExecutionDetail>(`/api/v1/executions/${executionId}`),
   history: () => request<{ executions: HistoryEntry[] }>("/api/v1/history"),
   getSettings: () => request<Settings>("/api/v1/settings"),
+  testConnection: () =>
+    request<ConnectionTestResult>("/api/v1/settings/test-connection", { method: "POST" }),
   saveSettings: (body: {
     root?: string;
     privacy?: string;
@@ -227,6 +229,21 @@ export const api = {
     api_key?: string;
   }) => request<Settings>("/api/v1/settings", { method: "PUT", body: JSON.stringify(body) }),
 };
+
+export interface ConnectionCheck {
+  ok: boolean;
+  code: string | null;
+  message: string;
+  latency_ms: number;
+}
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  planning_ready: boolean;
+  model: string;
+  base_url: string;
+  checks: { chat: ConnectionCheck; tools: ConnectionCheck };
+}
 
 export const CAPABILITIES = [
   { icon: "🔍", title: "查找文件", example: "帮我找一下和 Postman 作业有关的文件" },

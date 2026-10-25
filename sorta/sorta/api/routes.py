@@ -75,6 +75,82 @@ def session(request: Request) -> dict:
     }
 
 
+@system_router.post("/api/v1/settings/test-connection", dependencies=[Depends(require_token)])
+def test_connection(request: Request) -> dict:
+    """模型连接测试（UX-07）：最小请求，不发送任何用户文件。
+
+    分两步检查：普通对话连通性；工具调用兼容性（规划功能依赖 tools 参数，
+    不能只凭普通文本响应判定可用）。区分鉴权失败、端点不可达、模型不存在。
+    """
+    import time as _time
+
+    model, llm = make_llm(request)
+    cfg = request.app.state.service.get_llm_config()
+
+    def _classify(exc: Exception) -> tuple[str, str]:
+        import openai
+
+        if isinstance(exc, openai.AuthenticationError):
+            return "AUTH_FAILED", "鉴权失败：API Key 无效或已过期"
+        if isinstance(exc, openai.NotFoundError):
+            return "MODEL_NOT_FOUND", "模型不存在或 Base URL 路径不正确"
+        if isinstance(exc, openai.RateLimitError):
+            return "RATE_LIMITED", "触发限流：请稍后重试"
+        if isinstance(exc, openai.APIConnectionError):
+            return "ENDPOINT_UNREACHABLE", "端点不可达：请检查 Base URL 与网络连接"
+        if isinstance(exc, openai.BadRequestError):
+            return "BAD_REQUEST", f"请求被端点拒绝：{exc}"
+        if isinstance(exc, openai.PermissionDeniedError):
+            return "PERMISSION_DENIED", "权限不足：该 Key 无权访问此模型"
+        return "UNKNOWN", f"{type(exc).__name__}: {exc}"
+
+    def _check(label: str, messages: list, tools: list | None) -> dict:
+        started = _time.perf_counter()
+        try:
+            llm.chat(model=model, messages=messages, tools=tools)
+        except Exception as exc:  # noqa: BLE001  测试端点：异常分类后如实报告
+            code, message = _classify(exc)
+            return {
+                "ok": False,
+                "code": code,
+                "message": message,
+                "latency_ms": int((_time.perf_counter() - started) * 1000),
+            }
+        return {
+            "ok": True,
+            "code": None,
+            "message": f"{label}正常",
+            "latency_ms": int((_time.perf_counter() - started) * 1000),
+        }
+
+    chat_check = _check(
+        "对话连接",
+        [{"role": "user", "content": "连接测试：请直接回复 OK，不要输出其他内容。"}],
+        None,
+    )
+    probe_tool = {
+        "type": "function",
+        "function": {
+            "name": "echo_probe",
+            "description": "兼容性探测用的最小工具",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    }
+    tools_check = _check(
+        "工具调用兼容性",
+        [{"role": "user", "content": "连接测试：请勿调用任何工具，直接回复 OK。"}],
+        [probe_tool],
+    )
+
+    return {
+        "ok": chat_check["ok"] and tools_check["ok"],
+        "planning_ready": chat_check["ok"] and tools_check["ok"],
+        "model": model,
+        "base_url": cfg["base_url"],
+        "checks": {"chat": chat_check, "tools": tools_check},
+    }
+
+
 @system_router.get("/api/v1/settings", dependencies=[Depends(require_token)])
 def get_settings(request: Request) -> dict:
     return request.app.state.service.get_settings()
