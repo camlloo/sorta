@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { api, type ExecutionDetail, type PlanDetail } from "../services/api";
 
-/** 示意图 ⑥⑦ + UX-02：右侧计划面板——时间线、原路径→新路径预览、
- * 低置信度默认排除、编辑锁定确认、执行与撤销。 */
+/** 签名组件：位移台账（transit ledger）。
+ * 每一项操作 = 一行「源 ————→ 目标」：hover 时箭头线转为信号红、
+ * 展开依据与置信度；执行时逐行翻转状态并滚动计数器。
+ * 低置信度默认排除；存在未保存编辑时锁定确认（UX-02）。 */
 
 interface Props {
   plan: PlanDetail;
@@ -12,6 +14,12 @@ interface Props {
   onExecuted: (result: ExecutionDetail) => void;
 }
 
+const CONFIDENCE_LABEL: Record<string, { text: string; className: string }> = {
+  high: { text: "高", className: "text-ink" },
+  medium: { text: "中", className: "text-caution" },
+  low: { text: "低", className: "text-signal" },
+};
+
 export default function PlanPanel({
   plan,
   toolEvents,
@@ -20,7 +28,6 @@ export default function PlanPanel({
   onExecuted,
 }: Props) {
   const [editing, setEditing] = useState(false);
-  // UX-02：低置信度项默认排除，逐项勾选后才纳入
   const [keep, setKeep] = useState<boolean[]>(plan.operations.map((o) => o.confidence !== "low"));
   const [dests, setDests] = useState<string[]>(plan.operations.map((o) => o.destination));
   const [busy, setBusy] = useState("");
@@ -28,12 +35,16 @@ export default function PlanPanel({
   const [execution, setExecution] = useState<ExecutionDetail | null>(null);
 
   const executed = execution !== null;
+  const done = execution
+    ? execution.operations.filter((o) => o.status === "succeeded").length
+    : 0;
+
   const steps = [
-    { title: "查找文件", detail: `只读调查完成，${toolEvents.length} 次工具调用` },
-    { title: "分类整理", detail: `生成 ${plan.operations.length} 项移动/复制操作` },
+    { label: "调查", detail: `${toolEvents.length} 次只读调用`, done: true },
+    { label: "计划", detail: `${plan.operations.length} 项操作`, done: true },
     executed
-      ? { title: "执行完成", detail: "计划已按批准内容执行，可在下方撤销" }
-      : { title: "等待确认", detail: "确认无误后执行，可先在预览中编辑" },
+      ? { label: "执行", detail: `${done}/${execution!.operations.length} 完成`, done: done === execution!.operations.length }
+      : { label: "待确认", detail: "确认前不改文件", done: false },
   ];
 
   async function run() {
@@ -99,207 +110,270 @@ export default function PlanPanel({
 
   const errors = plan.issues.filter((i) => i.level === "error");
   const warnings = plan.issues.filter((i) => i.level === "warning");
+  const execByIndex = new Map(execution?.operations.map((o) => [o.index, o]) ?? []);
 
   return (
-    <div className="flex h-full flex-col">
-      <h2 className="text-lg font-bold">执行计划</h2>
-      <div className="mt-4 space-y-3">
-        {steps.map((step, i) => (
-          <div key={step.title} className="flex gap-3">
-            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-xs font-bold text-white">
-              {i + 1}
-            </div>
-            <div>
-              <div className="text-sm font-semibold">{step.title}</div>
-              <div className="text-xs text-neutral-500">{step.detail}</div>
-            </div>
+    <div className="flex h-full flex-col overflow-y-auto">
+      {/* 台账头：状态 + 计数器 */}
+      <div className="sticky top-0 z-10 border-b border-rule bg-paper px-6 pt-6 pb-4">
+        <div className="flex items-baseline justify-between">
+          <div className="eyebrow">执行计划 / 台账</div>
+          <div className="font-mono text-[10px] text-graphite">
+            v{plan.version} · {plan.plan_hash.slice(0, 8)}
           </div>
-        ))}
+        </div>
+        <div className="mt-2 flex items-baseline gap-3">
+          <div className="font-mono text-[40px] leading-none font-semibold tracking-tight tabular-nums">
+            {executed ? done : plan.operations.length}
+          </div>
+          <div className="text-[12px] text-graphite">
+            {executed ? (
+              <>已执行 / 共 {execution!.operations.length} 项</>
+            ) : (
+              <>项操作 · 待确认</>
+            )}
+          </div>
+        </div>
+        {/* 阶段线 */}
+        <div className="mt-3 flex items-center gap-2 font-mono text-[10px]">
+          {steps.map((s, i) => (
+            <span key={s.label} className="flex items-center gap-2">
+              {i > 0 && <span className="h-px w-3 bg-rule-strong" aria-hidden />}
+              <span className={s.done ? "text-ink" : "text-graphite"}>
+                {s.done ? "■" : "□"} {s.label}
+              </span>
+              <span className="text-graphite">{s.detail}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+      {(busy === "approve" || busy === "execute" || busy === "undo") && (
+        <div className="marquee-line" aria-hidden />
+      )}
+
+      <div className="px-6 py-4">
+        <p className="text-[12px] leading-relaxed text-graphite">{plan.summary}</p>
       </div>
 
-      <hr className="my-4 border-neutral-200" />
-      <div className="flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold">预览（原路径 → 新路径）</h3>
-        <span className="text-xs text-neutral-500">
-          v{plan.version} · {plan.operations.length} 项
-        </span>
-      </div>
-      <div className="mt-2 max-h-72 overflow-y-auto rounded border border-neutral-200">
-        <table className="w-full text-left text-xs">
-          <tbody>
-            {plan.operations.map((op, i) => (
-              <tr
-                key={`${op.source_id}-${i}`}
-                className={`border-b border-neutral-100 last:border-0 ${
-                  editing && !keep[i] ? "opacity-40" : ""
-                }`}
-              >
-                <td className="px-2 py-1.5 align-top">
+      {/* 台账主体 */}
+      <div className="border-t border-rule">
+        {plan.operations.map((op, i) => {
+          const execOp = execByIndex.get(i);
+          const conf = CONFIDENCE_LABEL[op.confidence] ?? CONFIDENCE_LABEL.high;
+          const rowDim = editing && !keep[i];
+          const rowState = execOp
+            ? execOp.status === "succeeded"
+              ? "text-verify"
+              : "text-signal"
+            : "";
+          return (
+            <div
+              key={`${op.source_id}-${i}`}
+              className={`ledger-row file-row border-b border-rule px-6 py-3 transition-opacity duration-100 ${
+                rowDim ? "opacity-35" : ""
+              }`}
+              tabIndex={0}
+            >
+              <div className="flex items-center gap-2">
+                {editing && !executed && (
                   <input
                     type="checkbox"
-                    checked={editing ? keep[i] : true}
-                    disabled={!editing}
-                    title={op.confidence === "low" ? "低置信度操作，默认排除" : ""}
+                    className="shrink-0"
+                    checked={keep[i]}
                     onChange={(e) => {
                       const next = [...keep];
                       next[i] = e.target.checked;
                       setKeep(next);
                     }}
                   />
-                </td>
-                <td className="px-2 py-1.5">
-                  <div className="font-mono">{op.source}</div>
-                  <div className="font-mono text-neutral-700">→ {op.destination}</div>
-                  <div className="mt-0.5 text-neutral-400">
-                    [{op.action}/{op.confidence}]
-                    {op.confidence === "low" && (
-                      <span className="ml-1 rounded bg-amber-100 px-1 text-amber-700">
-                        低置信度（默认不执行）
-                      </span>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                )}
+                {!editing && executed && (
+                  <span className={`shrink-0 font-mono text-[12px] ${rowState}`}>
+                    {execOp?.status === "succeeded" ? "✓" : "✗"}
+                  </span>
+                )}
+                <span
+                  className={`max-w-[112px] shrink-0 truncate text-right font-mono text-[11px] ${rowState}`}
+                  title={op.source}
+                >
+                  {op.source}
+                </span>
+                <span className="ledger-arrow" aria-hidden />
+                <span className="max-w-[130px] shrink-0 truncate font-mono text-[11px] font-medium" title={op.destination}>
+                  {editing ? "" : op.destination}
+                </span>
+              </div>
+              {editing && !executed && (
+                <input
+                  className="mt-2 w-full border-b border-rule-strong bg-transparent px-1 py-1 font-mono text-[11px] focus:border-signal focus:outline-none disabled:opacity-30"
+                  disabled={!keep[i]}
+                  value={dests[i]}
+                  onChange={(e) => {
+                    const next = [...dests];
+                    next[i] = e.target.value;
+                    setDests(next);
+                  }}
+                />
+              )}
+              {/* 依据抽屉：hover / focus 展开 */}
+              <div className="ledger-detail">
+                <div className="pt-2 pl-6 text-[11px] leading-relaxed text-graphite">
+                  <span className={`font-semibold ${conf.className}`}>
+                    [{op.action}/{op.confidence === "high" ? "高" : op.confidence === "medium" ? "中" : "低置信·默认不执行"}]
+                  </span>{" "}
+                  {op.reason}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {plan.operations.length === 0 && (
+          <div className="px-6 py-6 font-mono text-[11px] text-graphite">
+            计划没有操作——所有文件保持原位。
+          </div>
+        )}
       </div>
 
-      {editing ? (
-        <div className="mt-2 space-y-1">
-          <p className="text-xs text-neutral-500">修改目标路径（每行对应一项操作）：</p>
-          {plan.operations.map((op, i) => (
-            <input
-              key={`${op.source_id}-input-${i}`}
-              className="w-full rounded border border-neutral-300 px-2 py-1 text-xs disabled:opacity-40"
-              disabled={!keep[i]}
-              value={dests[i]}
-              onChange={(e) => {
-                const next = [...dests];
-                next[i] = e.target.value;
-                setDests(next);
-              }}
-            />
-          ))}
-          <div className="flex gap-2">
-            <button
-              className="flex-1 rounded bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-              disabled={busy !== ""}
-              onClick={saveEdits}
-            >
-              {busy === "edit" ? "保存中…" : "保存编辑（自动重新校验）"}
-            </button>
-            <button
-              className="flex-1 rounded border border-neutral-300 px-3 py-1.5 text-xs"
-              onClick={() => setEditing(false)}
-            >
-              放弃编辑
-            </button>
+      {/* 编辑模式 */}
+      <div className="px-6 py-4">
+        {editing ? (
+          <div className="space-y-2">
+            <p className="font-mono text-[10px] text-graphite">
+              勾选保留操作；直接改写目标路径。低置信度默认不勾选。
+            </p>
+            <div className="flex gap-2">
+              <button
+                className="flex-1 bg-ink px-3 py-2 text-[12px] font-semibold text-paper transition-colors duration-100 hover:bg-signal disabled:opacity-40"
+                disabled={busy !== ""}
+                onClick={saveEdits}
+              >
+                {busy === "edit" ? "保存中…" : "保存编辑（v→自动+1）"}
+              </button>
+              <button
+                className="flex-1 border border-rule px-3 py-2 text-[12px] font-medium transition-colors duration-100 hover:border-ink"
+                onClick={() => setEditing(false)}
+              >
+                放弃编辑
+              </button>
+            </div>
           </div>
-        </div>
-      ) : (
-        !executed && (
-          <button
-            className="mt-2 text-left text-xs text-neutral-500 hover:text-neutral-800"
-            onClick={() => {
-              setKeep(plan.operations.map((o) => o.confidence !== "low"));
-              setDests(plan.operations.map((o) => o.destination));
-              setEditing(true);
-            }}
-          >
-            编辑计划（可剔除操作 / 修改目标路径；低置信度默认排除）
-          </button>
-        )
-      )}
+        ) : (
+          !executed && (
+            <button
+              className="font-mono text-[11px] text-graphite underline-offset-2 hover:text-ink hover:underline"
+              onClick={() => {
+                setKeep(plan.operations.map((o) => o.confidence !== "low"));
+                setDests(plan.operations.map((o) => o.destination));
+                setEditing(true);
+              }}
+            >
+              编辑台账（剔除操作 / 修改目标）
+            </button>
+          )
+        )}
+      </div>
 
-      {errors.map((issue, i) => (
-        <div key={`e-${i}`} className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">
-          {issue.operation_index !== null && `操作#${issue.operation_index} `}
-          {issue.code}: {issue.message}
-        </div>
-      ))}
-      {warnings.map((issue, i) => (
-        <div key={`w-${i}`} className="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          {issue.operation_index !== null && `操作#${issue.operation_index} `}
-          {issue.code}: {issue.message}
-        </div>
-      ))}
-      {plan.issues.length === 0 && (
-        <div className="mt-2 rounded bg-green-50 px-3 py-2 text-xs text-green-700">
-          校验通过：未发现问题。
-        </div>
-      )}
-      {plan.uncertain_names.length > 0 && (
-        <div className="mt-2 rounded bg-blue-50 px-3 py-2 text-xs text-blue-700">
-          待确认文件（不移动）：{plan.uncertain_names.join("、")}
+      {/* 校验结果：线条式通知 */}
+      {(errors.length > 0 || warnings.length > 0 || plan.issues.length === 0) && (
+        <div className="border-t border-rule px-6 py-4 space-y-2">
+          {plan.issues.length === 0 && (
+            <div className="border-l-2 border-verify pl-3 text-[11px] text-verify">
+              校验通过：未发现问题。
+            </div>
+          )}
+          {errors.map((issue, i) => (
+            <div key={`e-${i}`} className="border-l-2 border-signal pl-3 text-[11px] leading-relaxed">
+              <span className="font-mono font-semibold">{issue.code}</span>{" "}
+              {issue.message}
+            </div>
+          ))}
+          {warnings.map((issue, i) => (
+            <div key={`w-${i}`} className="border-l-2 border-caution pl-3 text-[11px] leading-relaxed text-caution">
+              {issue.message}
+            </div>
+          ))}
+          {plan.uncertain_names.length > 0 && (
+            <div className="border-l-2 border-rule-strong pl-3 text-[11px] leading-relaxed text-graphite">
+              待确认（不移动）：{plan.uncertain_names.join("、")}
+            </div>
+          )}
         </div>
       )}
 
       {error && (
-        <div className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>
+        <div className="border-l-2 border-signal px-6 py-3 text-[11px] leading-relaxed">
+          {error}
+        </div>
       )}
 
       {editing && !executed && (
-        <p className="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          存在未保存的编辑：请先「保存编辑」或「放弃编辑」，再确认执行。
-        </p>
+        <div className="border-l-2 border-caution px-6 py-2 text-[11px] text-caution">
+          存在未保存的编辑：先保存或放弃，才能确认执行。
+        </div>
       )}
 
-      {execution ? (
-        <div className="mt-4 space-y-2">
-          <div
-            className={`rounded px-3 py-2 text-xs ${
-              execution.status === "completed"
-                ? "bg-green-50 text-green-700"
-                : "bg-red-50 text-red-700"
-            }`}
-          >
-            执行状态：{execution.status}（{execution.execution_id}）
-          </div>
-          {execution.operations.map((op) => (
-            <div key={op.index} className="text-xs">
-              {op.status === "succeeded" ? "✅" : "❌"} {op.source} → {op.destination}
-              {op.error && <span className="text-red-600">（{op.error}）</span>}
+      {/* 执行 / 撤销 */}
+      <div className="sticky bottom-0 border-t-2 border-ink bg-paper px-6 py-4">
+        {execution ? (
+          <div className="space-y-2">
+            <div className="flex items-baseline justify-between">
+              <span
+                className={`text-[13px] font-semibold ${
+                  execution.status === "completed" ? "text-verify" : "text-signal"
+                }`}
+              >
+                {execution.status === "completed" ? "执行完成" : execution.status}
+              </span>
+              <span className="font-mono text-[10px] text-graphite">
+                {execution.execution_id}
+              </span>
             </div>
-          ))}
-          <button
-            className="w-full rounded border border-neutral-300 px-3 py-2 text-sm disabled:opacity-50"
-            disabled={busy !== ""}
-            onClick={undo}
-          >
-            {busy === "undo" ? "撤销中…" : "撤销该批次"}
-          </button>
-        </div>
-      ) : (
-        <div className="mt-auto grid grid-cols-2 gap-2 pt-4">
-          <button
-            className="rounded bg-neutral-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
-            disabled={
-              plan.has_errors ||
-              plan.operations.length === 0 ||
-              busy !== "" ||
-              editing // UX-02：未保存编辑时禁止确认
-            }
-            onClick={run}
-          >
-            {busy === "approve" || busy === "execute" ? "执行中…" : "▶ 确认并执行"}
-          </button>
-          <button
-            className="rounded border border-neutral-300 px-3 py-2 text-sm disabled:opacity-40"
-            disabled={busy !== "" || editing}
-            onClick={cancel}
-          >
-            ↩ 取消
-          </button>
-        </div>
-      )}
+            {execution.operations
+              .filter((o) => o.status !== "succeeded")
+              .map((o) => (
+                <div key={o.index} className="font-mono text-[10px] leading-relaxed text-signal">
+                  ✗ {o.source} — {o.error}
+                </div>
+              ))}
+            <button
+              className="w-full border border-ink px-3 py-2.5 text-[13px] font-semibold transition-colors duration-100 hover:bg-ink hover:text-paper disabled:opacity-40"
+              disabled={busy !== ""}
+              onClick={undo}
+            >
+              {busy === "undo" ? "撤销中…" : "↩ 撤销该批次"}
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <button
+              className="flex-1 bg-signal px-3 py-2.5 text-[13px] font-semibold text-paper transition-all duration-150 hover:bg-ink disabled:opacity-30"
+              disabled={
+                plan.has_errors || plan.operations.length === 0 || busy !== "" || editing
+              }
+              onClick={run}
+            >
+              {busy === "approve" || busy === "execute" ? "执行中…" : "确认并执行"}
+            </button>
+            <button
+              className="shrink-0 border border-rule px-4 py-2.5 text-[13px] font-medium transition-colors duration-100 hover:border-ink disabled:opacity-40"
+              disabled={busy !== "" || editing}
+              onClick={cancel}
+            >
+              取消
+            </button>
+          </div>
+        )}
+        <p className="mt-2 font-mono text-[9px] leading-relaxed text-graphite">
+          确认前 0 次文件变更 · 确认后逐项记录、不覆盖、可撤销
+        </p>
+      </div>
 
       {toolEvents.length > 0 && (
-        <details className="mt-4">
-          <summary className="cursor-pointer text-xs text-neutral-500">
-            只读工具调用日志（{toolEvents.length} 次）
+        <details className="border-t border-rule px-6 py-3">
+          <summary className="cursor-pointer font-mono text-[10px] tracking-wider text-graphite uppercase">
+            只读工具日志 · {toolEvents.length}
           </summary>
-          <div className="mt-1 max-h-40 overflow-y-auto text-xs text-neutral-500">
+          <div className="mt-2 max-h-36 overflow-y-auto font-mono text-[10px] leading-relaxed text-graphite">
             {toolEvents.map((event, i) => (
               <div key={i}>{event}</div>
             ))}

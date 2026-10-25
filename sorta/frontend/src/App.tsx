@@ -26,7 +26,13 @@ export interface WorkspaceState {
 }
 
 interface WorkspaceContextValue extends WorkspaceState {
-  setWorkspace: (info: { scan_id: string; root: string; file_count: number }) => void;
+  setWorkspace: (info: {
+    scan_id: string;
+    root: string;
+    file_count: number;
+    has_more?: boolean;
+    skipped_directories?: string[];
+  }) => void;
   refreshFiles: (scanId: string) => Promise<void>;
   clearWorkspace: () => void;
   refreshSettings: () => Promise<void>;
@@ -40,6 +46,13 @@ export function useWorkspace(): WorkspaceContextValue {
   if (!ctx) throw new Error("useWorkspace 必须在 WorkspaceProvider 内使用");
   return ctx;
 }
+
+const NAV = [
+  { to: "/", label: "对话" },
+  { to: "/files", label: "文件库" },
+  { to: "/history", label: "历史" },
+  { to: "/settings", label: "设置" },
+];
 
 export default function App() {
   const [state, setState] = useState<WorkspaceState>({
@@ -85,13 +98,13 @@ export default function App() {
   }, []);
 
   const setWorkspace = useCallback(
-        (info: {
-          scan_id: string;
-          root: string;
-          file_count: number;
-          has_more?: boolean;
-          skipped_directories?: string[];
-        }) => {
+    (info: {
+      scan_id: string;
+      root: string;
+      file_count: number;
+      has_more?: boolean;
+      skipped_directories?: string[];
+    }) => {
       localStorage.setItem("sorta_scan_id", info.scan_id);
       localStorage.setItem("sorta_root", info.root);
       setState((s) => ({
@@ -140,65 +153,103 @@ export default function App() {
       value={{ ...state, setWorkspace, refreshFiles, clearWorkspace, refreshSettings }}
     >
       <div className="flex h-full">
-        <aside className="flex w-[220px] shrink-0 flex-col border-r border-neutral-200">
-          <div className="px-6 py-6">
-            <div className="text-xl font-bold tracking-tight">SORTA</div>
-            <div className="mt-0.5 text-[10px] tracking-[0.2em] text-neutral-400">
+        {/* 左栏：品牌 / 导航 / 索引计数器。当前项靠 3px 信号红条 + 字重声明。 */}
+        <aside className="flex w-[220px] shrink-0 flex-col border-r border-rule">
+          <div className="px-6 pt-8 pb-6">
+            <div
+              className="text-[28px] leading-none font-extrabold tracking-[-0.04em]"
+              style={{ fontWeight: 850 }}
+            >
+              SORTA
+            </div>
+            <div className="mt-2 font-mono text-[10px] tracking-[0.18em] text-graphite">
               AI FILE ORGANIZER
             </div>
+            <div className="mt-1 font-mono text-[10px] tracking-[0.18em] text-graphite">
+              / LOCAL
+            </div>
           </div>
-          <nav className="flex flex-col gap-1 px-3">
-            {[
-              { to: "/", label: "对话", icon: "💬" },
-              { to: "/files", label: "文件库", icon: "🗂️" },
-              { to: "/history", label: "历史", icon: "📜" },
-              { to: "/settings", label: "设置", icon: "⚙️" },
-            ].map((item) => (
+
+          <nav className="flex flex-col" aria-label="主导航">
+            {NAV.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 end={item.to === "/"}
                 className={({ isActive }) =>
-                  `rounded-md px-3 py-2 text-sm ${
+                  `group relative border-b border-rule py-3 pr-4 pl-6 text-[15px] transition-colors duration-100 ${
                     isActive
-                      ? "bg-neutral-100 font-medium text-neutral-900"
-                      : "text-neutral-600 hover:bg-neutral-50"
+                      ? "bg-ink font-semibold text-paper"
+                      : "font-medium text-ink hover:bg-ink hover:text-paper"
                   }`
                 }
               >
-                <span className="mr-2">{item.icon}</span>
-                {item.label}
+                {({ isActive }) => (
+                  <>
+                    <span
+                      className={`absolute top-0 bottom-0 left-0 w-[3px] transition-opacity duration-100 ${
+                        isActive ? "bg-signal opacity-100" : "opacity-0"
+                      }`}
+                      aria-hidden
+                    />
+                    {item.label}
+                  </>
+                )}
               </NavLink>
             ))}
           </nav>
-          <div className="mt-auto px-6 py-4 text-xs text-neutral-500">
+
+          {/* 索引计数器：大 mono 数字是文件库状态的客观陈述 */}
+          <div className="mt-auto px-6 pb-6">
+            <div className="eyebrow">已索引</div>
             {state.scanId ? (
               <>
-                <div className="font-medium text-neutral-800">
-                  🟢 已索引 {state.fileCount} 个文件
+                <div className="mt-1 font-mono text-[34px] leading-none font-semibold tracking-tight tabular-nums">
+                  {state.fileCount}
+                  <span className="ml-1 text-[12px] font-normal text-graphite">个文件</span>
                 </div>
-                <div className="mt-1 truncate text-neutral-400" title={state.root}>
+                {state.hasMore && (
+                  <div className="mt-1 font-mono text-[10px] text-caution">+ 还有更多未加载</div>
+                )}
+                {state.skippedDirectories.length > 0 && (
+                  <div
+                    className="mt-1 font-mono text-[10px] text-caution"
+                    title={state.skippedDirectories.join("、")}
+                  >
+                    ! 跳过 {state.skippedDirectories.length} 个目录
+                  </div>
+                )}
+                <div className="mt-2 truncate font-mono text-[10px] text-graphite" title={state.root}>
                   {state.root}
                 </div>
               </>
             ) : (
               <>
-                <div>⚪ 未扫描目录</div>
+                <div className="mt-1 font-mono text-[34px] leading-none font-semibold text-rule-strong">
+                  —
+                </div>
                 <button
-                  className="mt-1 text-blue-600 hover:underline"
+                  className="mt-2 text-left text-[12px] text-signal underline-offset-2 hover:underline"
                   onClick={() => navigate("/settings")}
                 >
-                  在「设置」中选择工作目录
+                  选择工作目录 →
                 </button>
               </>
             )}
           </div>
         </aside>
+
         <main className="min-w-0 flex-1 overflow-y-auto">
           {!booted ? (
-            <div className="p-8 text-sm text-neutral-400">正在连接 SORTA 服务…</div>
+            <div className="p-8 font-mono text-xs text-graphite">正在连接 SORTA 服务…</div>
           ) : bootError ? (
-            <div className="p-8 text-red-600">无法连接 SORTA 服务：{bootError}</div>
+            <div className="border-b-2 border-signal p-8">
+              <div className="eyebrow">连接失败</div>
+              <p className="mt-2 text-sm">{bootError}</p>
+              <p className="mt-1 text-xs text-graphite">
+                请确认服务已启动：uv run sorta ui
+              </p>
+            </div>
           ) : (
             <Routes>
               <Route path="/" element={<ChatPage />} />

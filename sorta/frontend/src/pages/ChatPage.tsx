@@ -3,7 +3,6 @@ import { useWorkspace } from "../App";
 import PlanPanel from "../components/PlanPanel";
 import {
   api,
-  CAPABILITIES,
   type ExecutionDetail,
   type JobSnapshot,
   type PlanDetail,
@@ -16,8 +15,8 @@ interface ChatMessage {
   content: string;
 }
 
-/** UX-01/05 + EXT-02：对话状态持久化；任务分流（查找/问答/整理/澄清）；
- * 待确认计划时输入即修改计划；模板选择器注入整理偏好。 */
+/** 对话页：海报式空态 + 命令行列表（hover 整行反色）+ 对话流 + composer。
+ * 状态持久化与任务分流逻辑见 EXT-02 / UX-05。 */
 
 const KEY = {
   messages: "sorta_chat_messages",
@@ -56,25 +55,44 @@ function findMatchesText(result: Extract<TaskResult, { task_type: "find" }>): st
   const lines =
     result.matches.length === 0
       ? ["没有匹配的文件。"]
-      : result.matches.map((m) => `📄 ${m.path}（${m.reason}）`);
-  return `找到 ${result.matches.length} 个匹配文件：\n${lines.join("\n")}\n\n${result.note}`;
+      : result.matches.map((m) => `${m.path} — ${m.reason}`);
+  return `${result.note}\n${lines.join("\n")}`;
 }
 
 function taskResultMessage(result: TaskResult, toolEvents: string[]): string {
-  if (result.task_type === "organize") {
-    return ""; // 计划走右侧面板；此占位不会使用
-  }
+  if (result.task_type === "organize") return "";
   if (result.task_type === "find") {
-    return `${findMatchesText(result)}\n\n共 ${toolEvents.length} 次只读工具调用。`;
+    return `${findMatchesText(result)}\n检索了 ${result.scanned} 个文件的文件名，${toolEvents.length} 次只读工具调用。`;
   }
   if (result.task_type === "ask") {
-    const refs = result.references.length
-      ? `\n\n涉及文件：${result.references.join("、")}`
-      : "";
+    const refs = result.references.length ? `\n\n涉及文件：${result.references.join("、")}` : "";
     return `${result.answer}${refs}`;
   }
   return result.question;
 }
+
+const COMMANDS = [
+  {
+    title: "查找文件",
+    example: "帮我找一下和 Postman 作业有关的文件",
+    taskType: "find" as const,
+  },
+  {
+    title: "整理文件",
+    example: "把与安全学习相关的资料整理到 Security-Learning",
+    taskType: "organize" as const,
+  },
+  {
+    title: "了解目录",
+    example: "这个目录里大概是什么用途的文件？",
+    taskType: "ask" as const,
+  },
+  {
+    title: "自由指令",
+    example: "帮我把安装包移到 Installers 目录，其他文件别动",
+    taskType: "auto" as const,
+  },
+];
 
 export default function ChatPage() {
   const workspace = useWorkspace();
@@ -87,11 +105,23 @@ export default function ChatPage() {
   const [lastExecution, setLastExecution] = useState<ExecutionDetail | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templateId, setTemplateId] = useState<number | null>(null);
-  const planPanelRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const planningBlocked = planning || !workspace.scanId || !workspace.hasApiKey;
   const disabled = planningBlocked || input.trim() === "";
   const canRevise = plan !== null && !lastExecution && !planning;
+
+  // 「/」快捷聚焦输入框
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "/" && document.activeElement?.tagName !== "TEXTAREA" && document.activeElement?.tagName !== "INPUT") {
+        e.preventDefault();
+        composerRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // UX-05：状态持久化
   useEffect(() => {
@@ -186,8 +216,9 @@ export default function ChatPage() {
                   {
                     role: "assistant",
                     content:
-                      `${detail.summary}\n\n共 ${snapshot.tool_events.length} 次只读工具调用，` +
-                      `生成 ${detail.operations.length} 项操作；右侧可预览、编辑并确认执行。` +
+                      `${detail.summary}\n\n${snapshot.tool_events.length} 次只读工具调用，` +
+                      `生成 ${detail.operations.length} 项操作。右侧台账待你确认——` +
+                      "确认之前不会改动任何文件。" +
                       (detail.uncertain_names.length
                         ? `另有 ${detail.uncertain_names.length} 个文件证据不足，已列入待确认。`
                         : ""),
@@ -200,9 +231,8 @@ export default function ChatPage() {
                   {
                     role: "assistant",
                     content:
-                      `已按你的要求更新计划（v${detail.version}）：新增 ${d.added} 项、` +
-                      `移除 ${d.removed} 项、调整 ${d.changed} 项目标。` +
-                      `原审批已失效，请在右侧重新确认。`,
+                      `计划已更新到 v${detail.version}：新增 ${d.added} 项、移除 ${d.removed} 项、` +
+                      `调整 ${d.changed} 项目标。原审批已失效，请在右侧重新确认。`,
                   },
                 ]);
               }
@@ -216,7 +246,6 @@ export default function ChatPage() {
               ]);
             });
         } else {
-          // 查找 / 问答 / 澄清：结果只在对话流中，不产生计划面板
           setPlan(null);
           sessionStorage.removeItem(KEY.planId);
           setMessages((m) => [
@@ -259,13 +288,7 @@ export default function ChatPage() {
       try {
         const { job_id } = reviseMode
           ? await api.revisePlan(plan!.plan_id, clean, plan!.version)
-          : await api.createTask(
-              workspace.scanId,
-              clean,
-              taskType,
-              templateId,
-              workspace.privacy,
-            );
+          : await api.createTask(workspace.scanId, clean, taskType, templateId, workspace.privacy);
         setJobId(job_id);
         sessionStorage.setItem(KEY.jobId, job_id);
         const snapshot = await pollJob(job_id);
@@ -293,96 +316,123 @@ export default function ChatPage() {
     setLastExecution(null);
     setMessages((m) => [
       ...m,
-      { role: "system", content: "—— 已开始新任务（原计划保留在数据库中，可在历史中查看）——" },
+      { role: "system", content: "— 已开始新任务（原计划保留在数据库中，可在历史中查看）—" },
     ]);
   }, []);
 
   return (
     <div className="flex h-full min-h-0">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-neutral-200 px-8 py-3 text-sm">
-          <div>
-            <span className="font-semibold">SORTA</span>
-            <span className="ml-2 text-neutral-400">· {workspace.model || "未配置模型"}</span>
-            {!workspace.hasApiKey && <span className="ml-2 text-red-600">· 未配置 API Key</span>}
+        {/* 顶栏：状态条 */}
+        <div className="flex items-center justify-between border-b border-rule px-8 py-3">
+          <div className="flex items-center gap-3 text-[13px]">
+            <span className="font-semibold">{workspace.model || "未配置模型"}</span>
+            {!workspace.hasApiKey && (
+              <span className="border-b-2 border-signal pb-0.5 text-signal">未配置 API Key</span>
+            )}
+            {workspace.privacy === "metadata_only" && (
+              <span className="font-mono text-[10px] text-graphite">PRIVACY / METADATA-ONLY</span>
+            )}
+            {workspace.privacy === "ask_before_content" && (
+              <span className="font-mono text-[10px] text-graphite">PRIVACY / ASK-FIRST</span>
+            )}
           </div>
           {canRevise && (
             <button
-              className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50"
+              className="border border-rule px-2 py-1 text-[11px] font-medium transition-colors duration-100 hover:border-ink hover:bg-ink hover:text-paper"
               onClick={startNewTask}
             >
               新建任务
             </button>
           )}
         </div>
+        {planning && <div className="marquee-line" aria-hidden />}
+
         <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
           {messages.length === 0 ? (
-            <div className="mx-auto max-w-xl">
-              <h1 className="mt-16 text-center text-4xl font-bold leading-snug">
-                你好，
-                <br />
-                我是 SORTA
-              </h1>
-              <p className="mt-4 text-center text-neutral-500">
-                用自然语言，帮你查找、理解、整理和管理文件。
-              </p>
-              <div className="mt-12 grid grid-cols-2 gap-3">
-                {CAPABILITIES.map((card) => (
+            <div className="mx-auto max-w-2xl rise-in">
+              {/* 海报式空态：排版即界面 */}
+              <div className="mt-10">
+                <div className="eyebrow">本地文件调度台</div>
+                <h1
+                  className="mt-3 text-[72px] leading-[0.95] font-extrabold tracking-[-0.04em]"
+                  style={{ fontWeight: 850 }}
+                >
+                  把混乱
+                  <br />
+                  变成秩序<span className="text-signal">.</span>
+                </h1>
+                <p className="mt-5 max-w-md text-[15px] leading-relaxed text-graphite">
+                  用自然语言查找、提问、整理本地文件。SORTA 只做只读调查，
+                  每一次移动都先成为一条可审阅的台账，经你确认才执行。
+                </p>
+              </div>
+
+              {/* 命令行列表：hover 整行反色 */}
+              <div className="mt-10 border-t border-rule">
+                {COMMANDS.map((cmd) => (
                   <button
-                    key={card.title}
-                    className="rounded-lg border border-neutral-200 p-4 text-left transition-colors hover:border-neutral-400 disabled:opacity-40"
+                    key={cmd.title}
+                    className="invert-hover flex w-full items-baseline gap-6 border-b border-rule px-4 py-4 text-left disabled:opacity-40"
                     disabled={planningBlocked}
-                    onClick={() => send(card.example, card.taskType)}
+                    onClick={() => send(cmd.example, cmd.taskType)}
                   >
-                    <div className="text-sm font-semibold">
-                      <span className="mr-1.5">{card.icon}</span>
-                      {card.title}
-                    </div>
-                    <div className="mt-1 text-xs text-neutral-500">“{card.example}”</div>
+                    <span className="w-20 shrink-0 text-[14px] font-semibold">{cmd.title}</span>
+                    <span className="invert-dim font-mono text-[12px] leading-relaxed">
+                      {cmd.example}
+                    </span>
                   </button>
                 ))}
               </div>
               {!workspace.scanId && (
-                <p className="mt-6 text-center text-xs text-neutral-400">
-                  请先在「设置」中选择工作目录
+                <p className="mt-4 font-mono text-[11px] text-graphite">
+                  先在「设置」中选择工作目录，命令即可使用。
                 </p>
               )}
             </div>
           ) : (
-            <div className="mx-auto max-w-2xl space-y-4">
+            <div className="mx-auto max-w-2xl space-y-5">
               {messages.map((msg, i) =>
                 msg.role === "system" ? (
-                  <div key={i} className="text-center text-xs text-neutral-400">
+                  <div key={i} className="border-t border-rule pt-2 text-center font-mono text-[10px] tracking-wider text-graphite">
                     {msg.content}
                   </div>
                 ) : (
                   <div key={i} className={msg.role === "user" ? "text-right" : ""}>
                     <div
-                      className={`inline-block max-w-[85%] whitespace-pre-wrap rounded-lg px-4 py-2.5 text-sm ${
+                      className={`inline-block max-w-[88%] text-left text-[13.5px] leading-relaxed whitespace-pre-wrap ${
                         msg.role === "user"
-                          ? "bg-neutral-900 text-white"
-                          : "border border-neutral-200 bg-white"
+                          ? "bg-ink px-4 py-2.5 text-paper"
+                          : "border-l-2 border-rule-strong pl-4"
                       }`}
                     >
+                      {msg.role === "assistant" && (
+                        <div className="eyebrow mb-1">SORTA</div>
+                      )}
                       {msg.content}
                     </div>
                   </div>
                 ),
               )}
               {planning && (
-                <div className="text-sm text-neutral-500">
-                  <span className="animate-pulse">
-                    {canRevise || plan ? "SORTA 正在更新计划…" : "SORTA 正在处理…"}
-                  </span>
+                <div className="border-l-2 border-signal pl-4">
+                  <div className="text-[13px]">
+                    <span className="font-semibold">
+                      {canRevise || plan ? "正在更新计划…" : "SORTA 正在调查…"}
+                    </span>{" "}
+                    <span className="font-mono text-[11px] text-graphite">
+                      {toolEvents.length > 0 ? `已执行 ${toolEvents.length} 次只读调用` : "…"}
+                    </span>
+                  </div>
                   {toolEvents.length > 0 && (
-                    <div className="mt-1 max-h-32 overflow-y-auto text-xs text-neutral-400">
+                    <div className="mt-1 max-h-28 overflow-y-auto font-mono text-[11px] text-graphite">
                       {toolEvents.map((event, i) => (
                         <div key={i}>{event}</div>
                       ))}
                     </div>
                   )}
                   <button
-                    className="mt-1 text-xs text-red-600 hover:underline"
+                    className="mt-1 text-[11px] text-signal underline-offset-2 hover:underline"
                     onClick={cancelPlanning}
                   >
                     取消（在安全停点生效）
@@ -390,40 +440,42 @@ export default function ChatPage() {
                 </div>
               )}
               {lastExecution && (
-                <div className="text-xs text-neutral-500">
-                  最近执行：{lastExecution.status}（{lastExecution.execution_id}）
+                <div className="font-mono text-[11px] text-graphite">
+                  最近执行：{lastExecution.status} / {lastExecution.execution_id}
                 </div>
               )}
             </div>
           )}
         </div>
-        <div className="border-t border-neutral-200 px-8 py-4">
+
+        {/* Composer */}
+        <div className="border-t-2 border-ink px-8 py-4">
           <div className="mx-auto max-w-2xl">
             {templates.length > 0 && !canRevise && (
-              <div className="mb-2 flex items-center gap-2 text-xs text-neutral-500">
-                <span>整理模板：</span>
+              <div className="mb-2 flex items-center gap-2 text-[11px] text-graphite">
+                <span className="eyebrow">模板</span>
                 <select
-                  className="rounded border border-neutral-300 px-2 py-1 text-xs"
+                  className="border border-rule px-2 py-1 font-mono text-[11px] focus:border-ink focus:outline-none"
                   value={templateId ?? ""}
                   onChange={(e) => setTemplateId(e.target.value ? Number(e.target.value) : null)}
                 >
-                  <option value="">不使用模板</option>
+                  <option value="">不使用</option>
                   {templates.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.name}
                     </option>
                   ))}
                 </select>
-                <span className="text-neutral-400">可在「设置」中管理</span>
               </div>
             )}
-            <div className="flex items-end gap-2">
+            <div className="flex items-end gap-3">
               <textarea
-                className="h-11 min-h-11 flex-1 resize-none rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none disabled:bg-neutral-50"
+                ref={composerRef}
+                className="h-12 min-h-12 flex-1 resize-none border-b border-rule-strong bg-transparent px-1 py-2.5 text-[14px] leading-relaxed transition-colors duration-100 focus:border-signal focus:outline-none disabled:opacity-40"
                 placeholder={
                   canRevise
-                    ? "直接输入修改要求，例如：安装包别动，学习资料按课程分"
-                    : "输入你的文件需求：查找、提问或整理（例如：帮我整理下载文件夹）"
+                    ? "输入修改要求，例如：安装包别动，学习资料按课程分"
+                    : "输入需求，或按 / 聚焦——查找、提问或整理"
                 }
                 rows={1}
                 value={input}
@@ -437,26 +489,24 @@ export default function ChatPage() {
                 }}
               />
               <button
-                className="h-11 w-11 rounded-lg bg-neutral-900 text-white disabled:opacity-40"
+                className="h-11 shrink-0 bg-ink px-6 text-[13px] font-semibold text-paper transition-colors duration-100 hover:bg-signal disabled:opacity-30"
                 disabled={disabled}
                 onClick={() => send(input)}
-                aria-label="发送"
               >
-                ↑
+                发送 ↵
               </button>
             </div>
             {canRevise && (
-              <p className="mt-1 text-xs text-neutral-400">
-                当前有待确认计划：输入将被视为修改要求；点「新建任务」改为全新任务。
+              <p className="mt-1.5 font-mono text-[10px] text-graphite">
+                当前有待确认计划：输入将被视为修改要求；「新建任务」改为全新任务。
               </p>
             )}
           </div>
         </div>
       </div>
-      <div
-        className="w-[360px] shrink-0 border-l border-neutral-200 px-5 py-5"
-        ref={planPanelRef}
-      >
+
+      {/* 右栏：执行计划（位移台账） */}
+      <div className="w-[360px] shrink-0 border-l border-rule">
         {plan ? (
           <PlanPanel
             plan={plan}
@@ -471,7 +521,6 @@ export default function ChatPage() {
             }}
             onExecuted={(result) => {
               setLastExecution(result);
-              // UX-04：执行后重新扫描，文件列表与磁盘一致（旧计划依据不变）
               if (workspace.scanId) {
                 void api
                   .rescanWorkspace(workspace.scanId)
@@ -481,11 +530,19 @@ export default function ChatPage() {
             }}
           />
         ) : (
-          <div>
-            <h2 className="text-lg font-bold">执行计划</h2>
-            <div className="mt-4 rounded border border-dashed border-neutral-200 px-4 py-6 text-sm text-neutral-500">
-              发起整理任务后，SORTA 生成的文件操作计划会显示在这里，供你预览、编辑和确认。
-              查找与问答的结果只会出现在对话中，不会产生执行面板。
+          <div className="px-6 py-8">
+            <div className="eyebrow">执行计划</div>
+            <p className="mt-3 text-[13px] leading-relaxed text-graphite">
+              整理任务生成的每一项文件操作都会记入这里的台账：
+              源路径 ——→ 目标路径，附依据与置信度。
+              台账经你确认才会执行；查找与问答不会产生台账。
+            </p>
+            <div className="mt-6 border-t border-rule pt-3 font-mono text-[11px] leading-relaxed text-graphite">
+              计划 v1 — 草稿
+              <br />
+              确认前 0 次文件变更
+              <br />
+              确认后 逐项记录 / 可撤销
             </div>
           </div>
         )}

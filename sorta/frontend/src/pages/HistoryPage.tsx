@@ -6,13 +6,13 @@ import {
   type HistoryEntry,
 } from "../services/api";
 
-/** UX-06：独立历史页——不依赖扫描会话；逐项源/目标路径、中文状态、撤销入口。 */
+/** 历史页：独立于扫描会话的执行台账。中文状态 + 逐项位移 + 撤销（UX-06）。 */
 
-const STATUS_ZH: Record<string, string> = {
-  running: "执行中",
-  completed: "已完成",
-  partial_failed: "部分失败",
-  failed: "失败",
+const STATUS: Record<string, { label: string; className: string }> = {
+  running: { label: "执行中", className: "text-caution" },
+  completed: { label: "已完成", className: "text-verify" },
+  partial_failed: { label: "部分失败", className: "text-signal" },
+  failed: { label: "失败", className: "text-signal" },
 };
 
 export default function HistoryPage() {
@@ -72,100 +72,123 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto px-8 py-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">执行历史</h1>
+    <div className="px-8 py-8">
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="eyebrow">执行历史 / 独立台账</div>
+          <div className="mt-2 flex items-baseline gap-3">
+            <span className="font-mono text-[44px] leading-none font-semibold tracking-tight tabular-nums">
+              {history.length}
+            </span>
+            <span className="text-[13px] text-graphite">个执行批次</span>
+          </div>
+          <p className="mt-1 font-mono text-[10px] text-graphite">
+            独立于当前扫描会话——扫描过期仍可查看历史并对无冲突批次尝试撤销。
+          </p>
+        </div>
         <button
-          className="rounded border border-neutral-300 px-3 py-1.5 text-xs disabled:opacity-50"
+          className="border border-rule px-3 py-2 font-mono text-[11px] transition-colors duration-100 hover:border-ink hover:bg-ink hover:text-paper disabled:opacity-40"
           disabled={busy}
           onClick={refresh}
         >
           ↻ 刷新
         </button>
       </div>
-      <p className="mt-1 text-xs text-neutral-500">
-        独立于当前扫描会话；扫描过期仍可查看历史并对无冲突批次尝试撤销。
-      </p>
 
       {error && (
-        <div className="mt-4 max-w-3xl rounded bg-red-50 px-3 py-2 text-xs text-red-700">
+        <div className="mt-4 border-l-2 border-signal pl-3 font-mono text-[11px] text-signal">
           {error}
         </div>
       )}
       {message && (
-        <div className="mt-4 max-w-3xl rounded bg-neutral-100 px-3 py-2 text-xs">{message}</div>
+        <div className="mt-4 border-l-2 border-ink pl-3 font-mono text-[11px] leading-relaxed">
+          {message}
+        </div>
       )}
 
       {loaded && history.length === 0 && (
-        <p className="mt-6 text-sm text-neutral-500">暂无执行历史。</p>
+        <p className="mt-8 text-[13px] text-graphite">
+          暂无执行历史——确认执行第一个整理计划后，这里会出现它的逐项台账。
+        </p>
       )}
 
       {history.length > 0 && (
-        <div className="mt-4 max-w-3xl overflow-hidden rounded border border-neutral-200">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-neutral-50 text-xs text-neutral-500">
-              <tr>
-                <th className="px-3 py-2 font-medium">批次</th>
-                <th className="px-3 py-2 font-medium">状态</th>
-                <th className="px-3 py-2 font-medium">开始</th>
-                <th className="px-3 py-2 font-medium">结束</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((e) => (
-                <tr
-                  key={e.execution_id}
-                  className={`cursor-pointer border-t border-neutral-100 hover:bg-neutral-50 ${
-                    selected === e.execution_id ? "bg-blue-50" : ""
+        <div className="mt-6 border-t border-ink">
+          {history.map((e) => {
+            const st = STATUS[e.status] ?? { label: e.status, className: "text-graphite" };
+            const active = selected === e.execution_id;
+            return (
+              <button
+                key={e.execution_id}
+                className={`flex w-full items-baseline gap-4 border-b border-rule px-2 py-3 text-left transition-colors duration-100 ${
+                  active ? "bg-ink text-paper" : "hover:bg-ink/5"
+                }`}
+                onClick={() => openDetail(e.execution_id)}
+              >
+                <span className="shrink-0 font-mono text-[10px] opacity-60">
+                  {formatEpoch(e.started_at)}
+                </span>
+                <span
+                  className={`min-w-0 flex-1 truncate font-mono text-[11px] ${
+                    active ? "" : "text-graphite"
                   }`}
-                  onClick={() => openDetail(e.execution_id)}
                 >
-                  <td className="px-3 py-1.5 font-mono text-xs">{e.execution_id}</td>
-                  <td className="px-3 py-1.5 text-xs">
-                    {STATUS_ZH[e.status] ?? e.status}
-                    {(e.status === "completed" || e.status === "partial_failed") && (
-                      <span className="ml-1 text-neutral-400">（可尝试撤销）</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-1.5 text-xs text-neutral-500">
-                    {formatEpoch(e.started_at)}
-                  </td>
-                  <td className="px-3 py-1.5 text-xs text-neutral-500">
-                    {formatEpoch(e.finished_at)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  {e.execution_id}
+                </span>
+                <span className={`shrink-0 text-[12px] font-semibold ${active ? "" : st.className}`}>
+                  {st.label}
+                  {(e.status === "completed" || e.status === "partial_failed") && (
+                    <span className={active ? " opacity-60" : " text-graphite"}> · 可撤销</span>
+                  )}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
 
       {detail && (
-        <div className="mt-6 max-w-3xl rounded border border-neutral-200 p-4">
-          <h2 className="text-sm font-bold">
-            批次详情（{STATUS_ZH[detail.status] ?? detail.status}）
-          </h2>
-          <div className="mt-2 space-y-1 text-xs">
+        <div className="mt-6 border-t-2 border-ink pt-4 rise-in">
+          <div className="flex items-baseline justify-between">
+            <div className="eyebrow">批次台账</div>
+            <span className="font-mono text-[10px] text-graphite">
+              {detail.execution_id}
+            </span>
+          </div>
+          <div className="mt-3 border-t border-rule">
             {detail.operations.map((op) => (
-              <div key={op.index}>
-                {op.status === "succeeded" ? "✅" : "❌"} [{op.action}]{" "}
-                <span className="font-mono">{op.source}</span> →{" "}
-                <span className="font-mono">{op.destination}</span>
-                {op.error && <span className="text-red-600">（{op.error}）</span>}
+              <div key={op.index} className="flex items-center gap-2 border-b border-rule py-2">
+                <span
+                  className={`shrink-0 font-mono text-[11px] ${
+                    op.status === "succeeded" ? "text-verify" : "text-signal"
+                  }`}
+                >
+                  {op.status === "succeeded" ? "✓" : "✗"}
+                </span>
+                <span className="max-w-[140px] shrink-0 truncate text-right font-mono text-[11px]">
+                  {op.source}
+                </span>
+                <span className="h-px min-w-3 flex-1 bg-rule-strong" aria-hidden />
+                <span className="max-w-[150px] shrink-0 truncate font-mono text-[11px]">
+                  {op.destination}
+                </span>
+                {op.error && (
+                  <span className="shrink-0 font-mono text-[10px] text-signal">{op.error}</span>
+                )}
               </div>
             ))}
           </div>
           {(detail.status === "completed" || detail.status === "partial_failed") && (
             <>
-              <p className="mt-3 text-xs text-neutral-500">
-                撤销为满足条件时的尽力恢复：目标未被修改且原路径空闲才会移回；冲突项将保留现场。
+              <p className="mt-3 font-mono text-[10px] leading-relaxed text-graphite">
+                撤销为满足条件时的尽力恢复：目标未被修改且原路径空闲才移回；冲突项保留现场。
               </p>
               <button
-                className="mt-2 rounded border border-neutral-300 px-3 py-1.5 text-xs disabled:opacity-50"
+                className="mt-2 border border-ink px-4 py-2 text-[13px] font-semibold transition-colors duration-100 hover:bg-ink hover:text-paper disabled:opacity-40"
                 disabled={busy}
                 onClick={undo}
               >
-                {busy ? "撤销中…" : "撤销该批次"}
+                {busy ? "撤销中…" : "↩ 撤销该批次"}
               </button>
             </>
           )}

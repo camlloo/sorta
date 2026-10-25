@@ -1,8 +1,36 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter-tight";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
 
-/* SORTA 瑞士风设计 Token（v2 文档 §5.2）：黑白灰 + 8px 网格 + 少量强调色 */
-:root {
-  --accent: #2563eb;
+/* SORTA 设计 Token —— 瑞士风（International Typographic Style）
+   纸面暖白 / 墨色主字 / 单一信号红（行动）/ mono 数据。
+   层级靠字号字重与 1px 界线，不靠阴影与装饰。 */
+@theme {
+  --color-paper: #fafaf8;
+  --color-ink: #111111;
+  --color-graphite: #6b6b66;
+  --color-rule: #e3e1db;
+  --color-rule-strong: #c9c7c0;
+  --color-signal: #e63312;
+  --color-verify: #1a7f37;
+  --color-caution: #b45309;
+
+  --font-display:
+    "Inter Tight Variable",
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    "Microsoft YaHei",
+    sans-serif;
+  --font-mono:
+    "IBM Plex Mono",
+    Consolas,
+    "Courier New",
+    monospace;
+
+  --ease-swiss: cubic-bezier(0.2, 0, 0.1, 1);
 }
 
 html,
@@ -12,16 +40,123 @@ body,
 }
 
 body {
-  @apply bg-white text-neutral-900 antialiased;
-  font-family:
-    Inter,
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    "Microsoft YaHei",
-    sans-serif;
+  @apply bg-paper text-ink antialiased;
+  font-family: var(--font-display);
 }
 
-h1 {
-  @apply text-3xl font-bold tracking-tight;
+::selection {
+  background: var(--color-signal);
+  color: var(--color-paper);
+}
+
+/* 键盘焦点：可见且克制 */
+:focus-visible {
+  outline: 2px solid var(--color-signal);
+  outline-offset: 2px;
+}
+
+/* 眉标：瑞士式小节标题（大写字距 + 石墨色） */
+.eyebrow {
+  @apply text-[11px] font-semibold tracking-[0.14em] uppercase text-graphite;
+}
+
+/* 执行中的走线：面板顶部 1px 红线循环推进 */
+@keyframes sorta-marquee {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+.marquee-line {
+  position: relative;
+  overflow: hidden;
+  height: 2px;
+  background: var(--color-rule);
+}
+.marquee-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: var(--color-signal);
+  animation: sorta-marquee 1.1s var(--ease-swiss) infinite;
+}
+
+/* 位移台账：hover 时中段界线伸展为信号红 */
+.ledger-arrow {
+  flex: 1 1 auto;
+  min-width: 12px;
+  height: 1px;
+  background: var(--color-rule-strong);
+  position: relative;
+  transition: background 130ms var(--ease-swiss);
+}
+.ledger-row:hover .ledger-arrow,
+.ledger-row:focus-within .ledger-arrow {
+  background: var(--color-signal);
+}
+
+/* 行反转：命令行/导航的经典瑞士 hover */
+.invert-hover {
+  transition:
+    background-color 130ms var(--ease-swiss),
+    color 130ms var(--ease-swiss);
+}
+.invert-hover:hover:not(:disabled) {
+  background: var(--color-ink);
+  color: var(--color-paper);
+}
+.invert-hover:hover:not(:disabled) .invert-dim {
+  color: color-mix(in srgb, var(--color-paper) 72%, transparent);
+}
+.invert-hover:hover:not(:disabled) .invert-mono {
+  color: color-mix(in srgb, var(--color-signal) 80%, var(--color-paper));
+}
+
+/* 依据抽屉：hover/focus 展开 */
+.ledger-detail {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 160ms var(--ease-swiss);
+}
+.ledger-row:hover .ledger-detail,
+.ledger-row:focus-within .ledger-detail {
+  max-height: 8rem;
+}
+
+/* 文件行内操作：hover 浮现 */
+.row-actions {
+  opacity: 0;
+  transition: opacity 130ms var(--ease-swiss);
+}
+.file-row:hover .row-actions,
+.file-row:focus-within .row-actions {
+  opacity: 1;
+}
+
+/* 出场：内容轻微上移淡入（仅一次，克制） */
+@keyframes sorta-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise-in {
+  animation: sorta-rise 240ms var(--ease-swiss) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
