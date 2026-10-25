@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useWorkspace } from "../App";
 import { api, type ConnectionTestResult } from "../services/api";
+import TemplateManager from "../components/TemplateManager";
 
 /** 示意图 ③ 设置页：工作目录授权 + 隐私模式 + LLM 模型配置（兼容 OpenAI 接口）。 */
 
@@ -205,6 +206,8 @@ export default function SettingsPage() {
           {busy === "scan" ? "扫描中…" : "保存并扫描"}
         </button>
       </div>
+
+      <TemplateManager />
 
       <h2 className="mt-8 text-sm font-bold">关于</h2>
       <p className="mt-2 max-w-xl text-xs text-neutral-400">

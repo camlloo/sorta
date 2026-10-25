@@ -53,7 +53,7 @@ def init_db(engine: Engine) -> None:
     _run_migrations(engine)
 
 
-_LATEST_SCHEMA_VERSION = 1
+_LATEST_SCHEMA_VERSION = 2
 
 
 def _run_migrations(engine: Engine) -> None:
@@ -85,7 +85,49 @@ def _migrate_1_add_plan_version(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE plans ADD COLUMN version INTEGER NOT NULL DEFAULT 1"))
 
 
-_MIGRATIONS = {1: _migrate_1_add_plan_version}
+_BUILTIN_TEMPLATES = [
+    (
+        "课程资料整理",
+        "学习资料按课程名建立子目录归类；安装包、压缩包保持原位；"
+        "同一课程的讲义、笔记、作业放在同一课程目录下。",
+    ),
+    (
+        "项目交付整理",
+        "按项目名建立目录；交付材料（报告、截图、数据）放入对应子目录；"
+        "生成物与源文件分开存放。",
+    ),
+    (
+        "下载目录清理",
+        "安装包移入 Installers；文档按类型分入 Documents 子目录；"
+        "超过三个月的旧文件移入 Archive；没有把握的文件列入待确认。",
+    ),
+]
+
+
+def _migrate_2_seed_templates(engine: Engine) -> None:
+    """v2：内置整理模板种子（幂等，已存在同名则跳过）。"""
+    import time as _time
+
+    from sqlalchemy.orm import Session
+
+    from sorta.storage.models import TemplateRow
+
+    with Session(engine) as db, db.begin():
+        for name, instruction in _BUILTIN_TEMPLATES:
+            exists = db.query(TemplateRow).filter(TemplateRow.name == name).first()
+            if exists is None:
+                db.add(
+                    TemplateRow(
+                        name=name, instruction=instruction, enabled=True,
+                        builtin=True, created_at=_time.time(),
+                    )
+                )
+
+
+_MIGRATIONS = {
+    1: _migrate_1_add_plan_version,
+    2: _migrate_2_seed_templates,
+}
 
 
 def _enable_sqlite_foreign_keys(engine: Engine) -> None:

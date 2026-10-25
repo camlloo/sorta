@@ -42,6 +42,19 @@ class FileRegistryRow(Base):
     modified_ns: Mapped[int] = mapped_column(BigInteger)
 
 
+class TemplateRow(Base):
+    """整理模板：可复用的整理偏好（目标结构、排除规则、策略约定）（EXT-01）。"""
+
+    __tablename__ = "templates"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    instruction: Mapped[str] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    builtin: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[float] = mapped_column(BigInteger)
+
+
 class PlanRow(Base):
     """计划及版本。plan_hash 是规范化序列化的 SHA-256，审批的绑定锚点。
 

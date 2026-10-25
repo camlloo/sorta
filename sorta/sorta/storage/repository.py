@@ -95,6 +95,11 @@ class PlanStore:
     def __init__(self, engine: Any):
         self._engine = engine
 
+    @property
+    def engine(self) -> Any:
+        """底层 SQLAlchemy Engine（供应用层需要独立会话时使用）。"""
+        return self._engine
+
     # ---- 扫描会话持久化 ---------------------------------------------------
 
     def save_session(self, session: ScanSession) -> None:

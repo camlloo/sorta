@@ -38,6 +38,24 @@ class ExecutionRequest(BaseModel):
     approval_id: int
 
 
+class TaskRequest(BaseModel):
+    scan_id: str = Field(min_length=1)
+    request: str = Field(min_length=1)
+    task_type: str = "auto"  # auto / find / ask / organize
+    template_id: int | None = None
+
+
+class TemplateCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    instruction: str = Field(min_length=1)
+
+
+class TemplateUpdateRequest(BaseModel):
+    name: str | None = None
+    instruction: str | None = None
+    enabled: bool | None = None
+
+
 class SettingsRequest(BaseModel):
     root: str | None = None
     privacy: str | None = None
@@ -394,6 +412,72 @@ def _plan_detail_dict(detail) -> dict:
     }
 
 
+# ---- 统一任务入口（EXT-02 查找/问答/整理分流） ---------------------------------
+
+tasks_router = APIRouter(dependencies=[Depends(require_token)])
+
+
+@tasks_router.post("/api/v1/tasks")
+def create_task(body: TaskRequest, request: Request) -> dict:
+    """统一任务入口：auto 分类后走 find/ask/organize，统一 Job 轮询。"""
+    if body.task_type not in ("auto", "find", "ask", "organize"):
+        raise HTTPException(status_code=422, detail={
+            "code": "VALIDATION_ERROR",
+            "message": "task_type 必须是 auto/find/ask/organize 之一",
+        })
+    model, llm = make_llm(request)
+    service = request.app.state.service
+    jobs = request.app.state.jobs
+    privacy = request.app.state.service.get_settings()["privacy"]
+
+    def _run(job_id: str, cancel_event) -> dict:
+        del job_id
+        return service.run_task(
+            body.scan_id,
+            body.request,
+            task_type=body.task_type,
+            template_id=body.template_id,
+            privacy=privacy,
+            model=model,
+            llm=llm,
+            cancel_event=cancel_event,
+        )
+
+    job_id = jobs.submit("task", _run)
+    return {"job_id": job_id}
+
+
+# ---- 整理模板（EXT-01） --------------------------------------------------------
+
+templates_router = APIRouter(dependencies=[Depends(require_token)])
+
+
+@templates_router.get("/api/v1/templates")
+def list_templates(request: Request) -> dict:
+    return {"templates": request.app.state.service.list_templates()}
+
+
+@templates_router.post("/api/v1/templates")
+def add_template(body: TemplateCreateRequest, request: Request) -> dict:
+    return request.app.state.service.add_template(body.name, body.instruction)
+
+
+@templates_router.put("/api/v1/templates/{template_id}")
+def update_template(template_id: int, body: TemplateUpdateRequest, request: Request) -> dict:
+    return request.app.state.service.update_template(
+        template_id,
+        name=body.name,
+        instruction=body.instruction,
+        enabled=body.enabled,
+    )
+
+
+@templates_router.delete("/api/v1/templates/{template_id}")
+def delete_template(template_id: int, request: Request) -> dict:
+    request.app.state.service.delete_template(template_id)
+    return {"deleted": True}
+
+
 # ---- 执行与撤销（示意图 ⑦） ----------------------------------------------------
 
 executions_router = APIRouter(dependencies=[Depends(require_token)])
@@ -431,7 +515,14 @@ def history(request: Request) -> dict:
     return {"executions": request.app.state.service.list_executions()}
 
 
-ALL_ROUTERS = (system_router, workspaces_router, plans_router, executions_router)
+ALL_ROUTERS = (
+    system_router,
+    workspaces_router,
+    plans_router,
+    tasks_router,
+    templates_router,
+    executions_router,
+)
 
 
 def _unused(*_args: Any) -> None:  # pragma: no cover

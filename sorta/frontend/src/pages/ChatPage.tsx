@@ -7,6 +7,8 @@ import {
   type ExecutionDetail,
   type JobSnapshot,
   type PlanDetail,
+  type TaskResult,
+  type Template,
 } from "../services/api";
 
 interface ChatMessage {
@@ -14,7 +16,8 @@ interface ChatMessage {
   content: string;
 }
 
-/** UX-01/UX-05：对话状态持久化（切页/刷新不丢）；待确认计划时输入即修改计划。 */
+/** UX-01/05 + EXT-02：对话状态持久化；任务分流（查找/问答/整理/澄清）；
+ * 待确认计划时输入即修改计划；模板选择器注入整理偏好。 */
 
 const KEY = {
   messages: "sorta_chat_messages",
@@ -49,6 +52,30 @@ function diffPlans(oldOps: PlanDetail["operations"], newOps: PlanDetail["operati
   return { added, removed, changed };
 }
 
+function findMatchesText(result: Extract<TaskResult, { task_type: "find" }>): string {
+  const lines =
+    result.matches.length === 0
+      ? ["没有匹配的文件。"]
+      : result.matches.map((m) => `📄 ${m.path}（${m.reason}）`);
+  return `找到 ${result.matches.length} 个匹配文件：\n${lines.join("\n")}\n\n${result.note}`;
+}
+
+function taskResultMessage(result: TaskResult, toolEvents: string[]): string {
+  if (result.task_type === "organize") {
+    return ""; // 计划走右侧面板；此占位不会使用
+  }
+  if (result.task_type === "find") {
+    return `${findMatchesText(result)}\n\n共 ${toolEvents.length} 次只读工具调用。`;
+  }
+  if (result.task_type === "ask") {
+    const refs = result.references.length
+      ? `\n\n涉及文件：${result.references.join("、")}`
+      : "";
+    return `${result.answer}${refs}`;
+  }
+  return result.question;
+}
+
 export default function ChatPage() {
   const workspace = useWorkspace();
   const [messages, setMessages] = useState<ChatMessage[]>(() => load(KEY.messages, []));
@@ -58,6 +85,8 @@ export default function ChatPage() {
   const [planning, setPlanning] = useState<boolean>(() => !!sessionStorage.getItem(KEY.jobId));
   const [jobId, setJobId] = useState<string | null>(() => sessionStorage.getItem(KEY.jobId));
   const [lastExecution, setLastExecution] = useState<ExecutionDetail | null>(null);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [templateId, setTemplateId] = useState<number | null>(null);
   const planPanelRef = useRef<HTMLDivElement>(null);
 
   const planningBlocked = planning || !workspace.scanId || !workspace.hasApiKey;
@@ -70,6 +99,15 @@ export default function ChatPage() {
     sessionStorage.setItem(KEY.toolEvents, JSON.stringify(toolEvents));
   }, [messages, toolEvents]);
 
+  useEffect(() => {
+    if (workspace.hasApiKey && templates.length === 0) {
+      api
+        .listTemplates()
+        .then((data) => setTemplates(data.templates.filter((t) => t.enabled)))
+        .catch(() => undefined);
+    }
+  }, [workspace.hasApiKey, templates.length]);
+
   // 恢复：计划详情 + 未完成任务轮询
   useEffect(() => {
     const savedPlanId = load<number | null>(KEY.planId, null);
@@ -81,12 +119,15 @@ export default function ChatPage() {
     }
     const savedJobId = sessionStorage.getItem(KEY.jobId);
     if (savedJobId && planning) {
-      void pollJob(savedJobId).catch(() => {
+      void pollJob(savedJobId).catch((err: Error & { status?: number }) => {
         setMessages((m) => [
           ...m,
           {
             role: "assistant",
-            content: "任务状态查询失败（服务可能已重启）。请重新发起请求。",
+            content:
+              err.status === 404
+                ? "任务已中断（服务可能已重启）。请重新发起请求。"
+                : `任务状态查询失败：${err.message}`,
           },
         ]);
         setPlanning(false);
@@ -106,7 +147,7 @@ export default function ChatPage() {
     async (id: string): Promise<JobSnapshot> => {
       for (;;) {
         await new Promise((r) => setTimeout(r, 1500));
-        let snapshot;
+        let snapshot: JobSnapshot;
         try {
           snapshot = await api.getJob(id);
         } catch (err) {
@@ -118,7 +159,11 @@ export default function ChatPage() {
           throw err;
         }
         setToolEvents(snapshot.tool_events);
-        if (snapshot.status === "completed" || snapshot.status === "failed" || snapshot.status === "canceled") {
+        if (
+          snapshot.status === "completed" ||
+          snapshot.status === "failed" ||
+          snapshot.status === "canceled"
+        ) {
           return snapshot;
         }
       }
@@ -126,49 +171,59 @@ export default function ChatPage() {
     [],
   );
 
-  const finishJob = useCallback(
+  const finishTask = useCallback(
     (snapshot: JobSnapshot, mode: "new" | "revise", prevPlan: PlanDetail | null) => {
       if (snapshot.status === "completed" && snapshot.result) {
         const result = snapshot.result;
-        void api
-          .getPlan(result.plan_id)
-          .then((detail) => {
-            setPlan(detail);
-            if (mode === "new") {
+        if (result.task_type === "organize") {
+          void api
+            .getPlan(result.plan_id)
+            .then((detail) => {
+              setPlan(detail);
+              if (mode === "new") {
+                setMessages((m) => [
+                  ...m,
+                  {
+                    role: "assistant",
+                    content:
+                      `${detail.summary}\n\n共 ${snapshot.tool_events.length} 次只读工具调用，` +
+                      `生成 ${detail.operations.length} 项操作；右侧可预览、编辑并确认执行。` +
+                      (detail.uncertain_names.length
+                        ? `另有 ${detail.uncertain_names.length} 个文件证据不足，已列入待确认。`
+                        : ""),
+                  },
+                ]);
+              } else if (prevPlan) {
+                const d = diffPlans(prevPlan.operations, detail.operations);
+                setMessages((m) => [
+                  ...m,
+                  {
+                    role: "assistant",
+                    content:
+                      `已按你的要求更新计划（v${detail.version}）：新增 ${d.added} 项、` +
+                      `移除 ${d.removed} 项、调整 ${d.changed} 项目标。` +
+                      `原审批已失效，请在右侧重新确认。`,
+                  },
+                ]);
+              }
+              sessionStorage.setItem(KEY.planId, JSON.stringify(result.plan_id));
+              void workspace.refreshFiles(result.scan_id);
+            })
+            .catch((err: Error) => {
               setMessages((m) => [
                 ...m,
-                {
-                  role: "assistant",
-                  content:
-                    `${detail.summary}\n\n共 ${snapshot.tool_events.length} 次只读工具调用，` +
-                    `生成 ${detail.operations.length} 项操作；右侧可预览、编辑并确认执行。` +
-                    (detail.uncertain_names.length
-                      ? `另有 ${detail.uncertain_names.length} 个文件证据不足，已列入待确认。`
-                      : ""),
-                },
+                { role: "assistant", content: `获取计划失败：${err.message}` },
               ]);
-            } else if (prevPlan) {
-              const d = diffPlans(prevPlan.operations, detail.operations);
-              setMessages((m) => [
-                ...m,
-                {
-                  role: "assistant",
-                  content:
-                    `已按你的要求更新计划（v${detail.version}）：新增 ${d.added} 项、` +
-                    `移除 ${d.removed} 项、调整 ${d.changed} 项目标。` +
-                    `原审批已失效，请在右侧重新确认。`,
-                },
-              ]);
-            }
-            sessionStorage.setItem(KEY.planId, JSON.stringify(result.plan_id));
-            void workspace.refreshFiles(result.scan_id);
-          })
-          .catch((err: Error) => {
-            setMessages((m) => [
-              ...m,
-              { role: "assistant", content: `获取计划失败：${err.message}` },
-            ]);
-          });
+            });
+        } else {
+          // 查找 / 问答 / 澄清：结果只在对话流中，不产生计划面板
+          setPlan(null);
+          sessionStorage.removeItem(KEY.planId);
+          setMessages((m) => [
+            ...m,
+            { role: "assistant", content: taskResultMessage(result, snapshot.tool_events) },
+          ]);
+        }
       } else if (snapshot.status === "failed") {
         setMessages((m) => [
           ...m,
@@ -185,7 +240,7 @@ export default function ChatPage() {
   );
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, taskType: "auto" | "find" | "ask" | "organize" = "auto") => {
       const clean = text.trim();
       if (!clean || planningBlocked || !workspace.scanId) return;
       setMessages((m) => [...m, { role: "user", content: clean }]);
@@ -204,11 +259,17 @@ export default function ChatPage() {
       try {
         const { job_id } = reviseMode
           ? await api.revisePlan(plan!.plan_id, clean, plan!.version)
-          : await api.createPlan(workspace.scanId, clean, workspace.privacy);
+          : await api.createTask(
+              workspace.scanId,
+              clean,
+              taskType,
+              templateId,
+              workspace.privacy,
+            );
         setJobId(job_id);
         sessionStorage.setItem(KEY.jobId, job_id);
         const snapshot = await pollJob(job_id);
-        finishJob(snapshot, reviseMode ? "revise" : "new", reviseMode ? prevPlan : null);
+        finishTask(snapshot, reviseMode ? "revise" : "new", reviseMode ? prevPlan : null);
       } catch (err) {
         setMessages((m) => [
           ...m,
@@ -219,7 +280,7 @@ export default function ChatPage() {
         sessionStorage.removeItem(KEY.jobId);
       }
     },
-    [planningBlocked, workspace, plan, lastExecution, pollJob, finishJob],
+    [planningBlocked, workspace, plan, lastExecution, templateId, pollJob, finishTask],
   );
 
   const cancelPlanning = useCallback(async () => {
@@ -271,7 +332,7 @@ export default function ChatPage() {
                     key={card.title}
                     className="rounded-lg border border-neutral-200 p-4 text-left transition-colors hover:border-neutral-400 disabled:opacity-40"
                     disabled={planningBlocked}
-                    onClick={() => send(card.example)}
+                    onClick={() => send(card.example, card.taskType)}
                   >
                     <div className="text-sm font-semibold">
                       <span className="mr-1.5">{card.icon}</span>
@@ -311,7 +372,7 @@ export default function ChatPage() {
               {planning && (
                 <div className="text-sm text-neutral-500">
                   <span className="animate-pulse">
-                    {canRevise || plan ? "SORTA 正在更新计划…" : "SORTA 正在调查…"}
+                    {canRevise || plan ? "SORTA 正在更新计划…" : "SORTA 正在处理…"}
                   </span>
                   {toolEvents.length > 0 && (
                     <div className="mt-1 max-h-32 overflow-y-auto text-xs text-neutral-400">
@@ -337,39 +398,59 @@ export default function ChatPage() {
           )}
         </div>
         <div className="border-t border-neutral-200 px-8 py-4">
-          <div className="mx-auto flex max-w-2xl items-end gap-2">
-            <textarea
-              className="h-11 min-h-11 flex-1 resize-none rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none disabled:bg-neutral-50"
-              placeholder={
-                canRevise
-                  ? "直接输入修改要求，例如：安装包别动，学习资料按课程分"
-                  : "输入你的文件需求，例如：帮我整理下载文件夹"
-              }
-              rows={1}
-              value={input}
-              disabled={planningBlocked}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void send(input);
+          <div className="mx-auto max-w-2xl">
+            {templates.length > 0 && !canRevise && (
+              <div className="mb-2 flex items-center gap-2 text-xs text-neutral-500">
+                <span>整理模板：</span>
+                <select
+                  className="rounded border border-neutral-300 px-2 py-1 text-xs"
+                  value={templateId ?? ""}
+                  onChange={(e) => setTemplateId(e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">不使用模板</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-neutral-400">可在「设置」中管理</span>
+              </div>
+            )}
+            <div className="flex items-end gap-2">
+              <textarea
+                className="h-11 min-h-11 flex-1 resize-none rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none disabled:bg-neutral-50"
+                placeholder={
+                  canRevise
+                    ? "直接输入修改要求，例如：安装包别动，学习资料按课程分"
+                    : "输入你的文件需求：查找、提问或整理（例如：帮我整理下载文件夹）"
                 }
-              }}
-            />
-            <button
-              className="h-11 w-11 rounded-lg bg-neutral-900 text-white disabled:opacity-40"
-              disabled={disabled}
-              onClick={() => send(input)}
-              aria-label="发送"
-            >
-              ↑
-            </button>
+                rows={1}
+                value={input}
+                disabled={planningBlocked}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void send(input);
+                  }
+                }}
+              />
+              <button
+                className="h-11 w-11 rounded-lg bg-neutral-900 text-white disabled:opacity-40"
+                disabled={disabled}
+                onClick={() => send(input)}
+                aria-label="发送"
+              >
+                ↑
+              </button>
+            </div>
+            {canRevise && (
+              <p className="mt-1 text-xs text-neutral-400">
+                当前有待确认计划：输入将被视为修改要求；点「新建任务」改为全新任务。
+              </p>
+            )}
           </div>
-          {canRevise && (
-            <p className="mx-auto mt-1 max-w-2xl text-xs text-neutral-400">
-              当前有待确认计划：输入将被视为修改要求；点「新建任务」改为全新整理。
-            </p>
-          )}
         </div>
       </div>
       <div
@@ -403,7 +484,8 @@ export default function ChatPage() {
           <div>
             <h2 className="text-lg font-bold">执行计划</h2>
             <div className="mt-4 rounded border border-dashed border-neutral-200 px-4 py-6 text-sm text-neutral-500">
-              发起对话后，SORTA 生成的文件操作计划会显示在这里，供你预览、编辑和确认。
+              发起整理任务后，SORTA 生成的文件操作计划会显示在这里，供你预览、编辑和确认。
+              查找与问答的结果只会出现在对话中，不会产生执行面板。
             </div>
           </div>
         )}

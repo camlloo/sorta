@@ -59,11 +59,36 @@ export interface PlanDetail {
   has_errors: boolean;
 }
 
+export interface PlanJobResult {
+  plan_id: number;
+  scan_id: string;
+  version: number;
+  plan_hash: string;
+}
+
+export interface FindMatch {
+  file_id: string;
+  path: string;
+  reason: string;
+}
+
+export type TaskResult =
+  | ({ task_type: "organize" } & PlanJobResult)
+  | {
+      task_type: "find";
+      keywords: string[];
+      matches: FindMatch[];
+      scanned: number;
+      note: string;
+    }
+  | { task_type: "ask"; answer: string; references: string[] }
+  | { task_type: "clarify"; question: string };
+
 export interface JobSnapshot {
   job_id: string;
   kind: string;
   status: "queued" | "running" | "completed" | "failed" | "canceled";
-  result: { plan_id: number; scan_id: string; version: number; plan_hash: string } | null;
+  result: TaskResult | null;
   error: { code: string; message: string } | null;
   tool_events: string[];
 }
@@ -189,6 +214,40 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ scan_id: scanId, request: requestText, privacy }),
     }),
+  createTask: (
+    scanId: string,
+    requestText: string,
+    taskType: "auto" | "find" | "ask" | "organize",
+    templateId: number | null,
+    privacy: string,
+  ) =>
+    request<{ job_id: string }>("/api/v1/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        scan_id: scanId,
+        request: requestText,
+        task_type: taskType,
+        template_id: templateId,
+        privacy,
+      }),
+    }),
+  listTemplates: () =>
+    request<{ templates: Template[] }>("/api/v1/templates"),
+  addTemplate: (name: string, instruction: string) =>
+    request<Template>("/api/v1/templates", {
+      method: "POST",
+      body: JSON.stringify({ name, instruction }),
+    }),
+  updateTemplate: (
+    id: number,
+    body: { name?: string; instruction?: string; enabled?: boolean },
+  ) =>
+    request<Template>(`/api/v1/templates/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteTemplate: (id: number) =>
+    request<{ deleted: boolean }>(`/api/v1/templates/${id}`, { method: "DELETE" }),
   getJob: (jobId: string) => request<JobSnapshot>(`/api/v1/jobs/${jobId}`),
   cancelJob: (jobId: string) =>
     request<{ canceled: boolean }>(`/api/v1/jobs/${jobId}/cancel`, { method: "POST" }),
@@ -245,12 +304,40 @@ export interface ConnectionTestResult {
   checks: { chat: ConnectionCheck; tools: ConnectionCheck };
 }
 
+export interface Template {
+  id: number;
+  name: string;
+  instruction: string;
+  enabled: boolean;
+  builtin: boolean;
+}
+
 export const CAPABILITIES = [
-  { icon: "🔍", title: "查找文件", example: "帮我找一下和 Postman 作业有关的文件" },
-  { icon: "📂", title: "整理文件", example: "把与安全学习相关的资料整理到 Security-Learning" },
-  { icon: "📄", title: "总结内容", example: "在文件库里总结任务书的主要内容" },
-  { icon: "✨", title: "其他操作", example: "帮我找出目录里的重复文件" },
-];
+  {
+    icon: "🔍",
+    title: "查找文件",
+    example: "帮我找一下和 Postman 作业有关的文件",
+    taskType: "find",
+  },
+  {
+    icon: "📂",
+    title: "整理文件",
+    example: "把与安全学习相关的资料整理到 Security-Learning",
+    taskType: "organize",
+  },
+  {
+    icon: "📄",
+    title: "总结内容",
+    example: "这个目录里大概是什么用途的文件？",
+    taskType: "ask",
+  },
+  {
+    icon: "✨",
+    title: "其他操作",
+    example: "帮我把安装包移到 Installers 目录，其他文件别动",
+    taskType: "auto",
+  },
+] as const;
 
 export function formatSize(n: number): string {
   let size = n;
