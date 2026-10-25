@@ -39,6 +39,3 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q"
