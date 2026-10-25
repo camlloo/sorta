@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from sorta.api.deps import require_token
+from sorta.api.deps import make_llm, require_token
 from sorta.config import PRIVACY_MODES
 
 # ---- 请求模型 ---------------------------------------------------------------
@@ -41,6 +41,9 @@ class ExecutionRequest(BaseModel):
 class SettingsRequest(BaseModel):
     root: str | None = None
     privacy: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
 
 
 # ---- system（health/session 免鉴权；settings 需鉴权） -------------------------
@@ -63,11 +66,12 @@ def session(request: Request) -> dict:
             status_code=403,
             detail={"code": "UNAUTHORIZED", "message": "拒绝跨站会话请求"},
         )
+    llm = state.service.get_llm_config()
     return {
         "token": state.api_token,
-        "model": state.model,
-        "base_url": state.base_url,
-        "has_api_key": state.has_api_key,
+        "model": llm["model"],
+        "base_url": llm["base_url"],
+        "has_api_key": bool(llm["api_key"]),
     }
 
 
@@ -87,10 +91,13 @@ def put_settings(body: SettingsRequest, request: Request) -> dict:
             },
         )
     current = request.app.state.service.get_settings()
-    root = body.root if body.root is not None else current["root"]
-    privacy = body.privacy if body.privacy is not None else current["privacy"]
-    request.app.state.service.save_settings(root=root, privacy=privacy)
-    return request.app.state.service.get_settings()
+    return request.app.state.service.save_settings(
+        root=body.root if body.root is not None else current["root"],
+        privacy=body.privacy if body.privacy is not None else current["privacy"],
+        model=body.model,
+        base_url=body.base_url,
+        api_key=body.api_key,
+    )
 
 
 # ---- 工作区与文件（示意图 ③ 文件库） -----------------------------------------
@@ -124,18 +131,9 @@ def file_preview(scan_id: str, file_id: str, request: Request) -> dict:
 
 @workspaces_router.post("/api/v1/scans/{scan_id}/files/{file_id}/summary")
 def file_summary(scan_id: str, file_id: str, request: Request) -> dict:
-    if not request.app.state.model:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "MODEL_UNAVAILABLE",
-                "message": "SORTA_MODEL 未配置，无法调用模型",
-            },
-        )
-    service = request.app.state.service
-    model = request.app.state.model
-    summary = service.summarize_file(
-        scan_id, file_id, llm=request.app.state.llm_factory(), model=model
+    model, llm = make_llm(request)
+    summary = request.app.state.service.summarize_file(
+        scan_id, file_id, llm=llm, model=model
     )
     return {"summary": summary}
 
@@ -158,18 +156,9 @@ def create_plan(body: PlanRequest, request: Request) -> dict:
         raise HTTPException(
             status_code=422, detail={"code": "VALIDATION_ERROR", "message": "privacy 不合法"}
         )
-    if not request.app.state.model:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "MODEL_UNAVAILABLE",
-                "message": "SORTA_MODEL 未配置，无法启动计划生成",
-            },
-        )
     service = request.app.state.service
     jobs = request.app.state.jobs
-    model = request.app.state.model
-    llm_factory = request.app.state.llm_factory
+    model, llm = make_llm(request)
     privacy = body.privacy or request.app.state.service.get_settings()["privacy"]
 
     def _run(job_id: str, cancel_event) -> dict:
@@ -178,7 +167,7 @@ def create_plan(body: PlanRequest, request: Request) -> dict:
             body.request,
             privacy=privacy,
             model=model,
-            llm=llm_factory(),
+            llm=llm,
             on_tool_record=lambda rec: jobs.add_event(
                 job_id, f"{'✓' if rec.ok else '✗'} {rec.name}: {rec.summary}"
             ),

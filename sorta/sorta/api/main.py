@@ -24,20 +24,16 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]  # sorta 项目根（pyproject 
 _FRONTEND_DIST = _REPO_ROOT / "frontend" / "dist"
 
 
-def _default_llm_factory() -> Any:
+def _default_llm_factory(model: str, api_key: str, base_url: str | None) -> Any:
     from sorta.agent.llm import OpenAICompatClient
-    from sorta.errors import ModelUnavailableError
 
-    api_key = os.environ.get("SORTA_API_KEY")
-    if not api_key:
-        raise ModelUnavailableError("缺少 SORTA_API_KEY 环境变量，无法调用模型")
-    return OpenAICompatClient(api_key=api_key, base_url=os.environ.get("SORTA_BASE_URL") or None)
+    return OpenAICompatClient(api_key=api_key, base_url=base_url)
 
 
 def create_app(
     *,
     config: SortaConfig | None = None,
-    llm_factory: Callable[[], Any] | None = None,
+    llm_factory: Callable[[str, str, str | None], Any] | None = None,
     enable_auth: bool = True,
 ) -> FastAPI:
     """构建 FastAPI 应用。enable_auth=False 仅用于自动化测试。"""

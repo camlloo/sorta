@@ -42,7 +42,7 @@ def _make_mock_llm():
 
 @pytest.fixture
 def api_env(tmp_path, monkeypatch):
-    monkeypatch.delenv("SORTA_API_KEY", raising=False)
+    monkeypatch.setenv("SORTA_API_KEY", "test-key")
     monkeypatch.setenv("SORTA_MODEL", "mock-model")
     monkeypatch.delenv("SORTA_CORS_ORIGINS", raising=False)
 
@@ -54,7 +54,11 @@ def api_env(tmp_path, monkeypatch):
     import dataclasses
 
     config = dataclasses.replace(SortaConfig(), db_url="sqlite://")
-    app = create_app(config=config, llm_factory=_make_mock_llm, enable_auth=True)
+    app = create_app(
+        config=config,
+        llm_factory=lambda model, api_key, base_url: _make_mock_llm(),
+        enable_auth=True,
+    )
     client = TestClient(app)
     return SimpleNamespace(root=root, config=config, client=client, app=app)
 

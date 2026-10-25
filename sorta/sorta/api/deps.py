@@ -52,7 +52,25 @@ def get_jobs(request: Request):
 
 
 def current_model(request: Request) -> str:
-    model = request.app.state.model
+    """运行时读取模型配置（设置页保存后立即生效，无需重启）。"""
+    model = request.app.state.service.get_llm_config()["model"]
     if not model:
         raise SortaError("SORTA_MODEL 未配置", details={"code": "MODEL_UNAVAILABLE"})
     return model
+
+
+def make_llm(request: Request) -> tuple[str, Any]:
+    """按当前设置构造 (model, LLMClient)；未配置时抛 503 MODEL_UNAVAILABLE。"""
+    cfg = request.app.state.service.get_llm_config()
+    if not cfg["api_key"] or not cfg["model"]:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "MODEL_UNAVAILABLE",
+                "message": "模型未配置：请在「设置」页填写模型名称与 API Key（兼容 OpenAI 接口）",
+            },
+        )
+    client = request.app.state.llm_factory(
+        cfg["model"], cfg["api_key"], cfg["base_url"] or None
+    )
+    return cfg["model"], client

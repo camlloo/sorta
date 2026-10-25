@@ -2,35 +2,62 @@ import { useEffect, useState } from "react";
 import { useWorkspace } from "../App";
 import { api } from "../services/api";
 
-/** 示意图 ③ 设置页：工作目录授权 + 隐私模式 + 模型状态。 */
+/** 示意图 ③ 设置页：工作目录授权 + 隐私模式 + LLM 模型配置（兼容 OpenAI 接口）。 */
 
 export default function SettingsPage() {
   const workspace = useWorkspace();
   const [root, setRoot] = useState(workspace.root);
   const [privacy, setPrivacy] = useState(workspace.privacy);
-  const [busy, setBusy] = useState(false);
+  const [model, setModel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [keyHint, setKeyHint] = useState("");
+  const [busy, setBusy] = useState<"" | "save" | "scan">("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
-    setRoot(workspace.root);
-    setPrivacy(workspace.privacy);
-  }, [workspace.root, workspace.privacy]);
+    api
+      .getSettings()
+      .then((s) => {
+        setRoot((r) => r || s.root);
+        setPrivacy(s.privacy);
+        setModel(s.model);
+        setBaseUrl(s.base_url);
+        setKeyHint(s.api_key_hint ?? "");
+      })
+      .catch((err: Error) => setError(err.message));
+  }, []);
 
-  async function saveAndScan() {
-    setBusy(true);
+  async function save(andScan: boolean) {
+    setBusy(andScan ? "scan" : "save");
     setError("");
     setMessage("");
     try {
-      await api.saveSettings({ root, privacy });
-      const info = await api.createWorkspace(root);
-      workspace.setWorkspace(info);
-      await workspace.refreshSettings();
-      setMessage(`已保存并索引 ${info.file_count} 个文件。`);
+      // 模型设置 + 目录/隐私一起保存；API Key 仅在用户输入时提交（不回显）
+      const settings = await api.saveSettings({
+        root,
+        privacy,
+        model,
+        base_url: baseUrl,
+        api_key: apiKey || undefined,
+      });
+      workspace.refreshSettings();
+      setApiKey("");
+      setKeyHint(settings.api_key_hint ?? "");
+      if (andScan) {
+        const info = await api.createWorkspace(root);
+        workspace.setWorkspace(info);
+        setMessage(
+          `已保存设置并索引 ${info.file_count} 个文件。模型配置立即生效，无需重启。`,
+        );
+      } else {
+        setMessage("设置已保存。模型配置立即生效，无需重启。");
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   }
 
@@ -38,7 +65,44 @@ export default function SettingsPage() {
     <div className="h-full overflow-y-auto px-8 py-6">
       <h1 className="text-xl font-bold">设置</h1>
 
-      <h2 className="mt-6 text-sm font-bold">工作目录</h2>
+      <h2 className="mt-6 text-sm font-bold">模型配置（兼容 OpenAI 接口）</h2>
+      <div className="mt-2 max-w-xl space-y-3">
+        <div>
+          <label className="block text-xs text-neutral-500">模型名称</label>
+          <input
+            className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 font-mono text-sm focus:border-neutral-500 focus:outline-none"
+            placeholder="例如 qwen3.8-flash、gpt-4o、deepseek-chat"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-neutral-500">
+            API Base URL（OpenAI 兼容端点；留空使用官方接口）
+          </label>
+          <input
+            className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 font-mono text-sm focus:border-neutral-500 focus:outline-none"
+            placeholder="例如 https://dashscope.aliyuncs.com/compatible-mode/v1"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-neutral-500">API Key</label>
+          <input
+            type="password"
+            className="mt-1 w-full rounded border border-neutral-300 px-3 py-2 font-mono text-sm focus:border-neutral-500 focus:outline-none"
+            placeholder={keyHint ? `已配置（${keyHint}），留空保持不变` : "sk-..."}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+          <p className="mt-1 text-xs text-neutral-400">
+            密钥仅保存在本机数据目录，不会回显、不会上传；留空表示保持现有密钥。
+          </p>
+        </div>
+      </div>
+
+      <h2 className="mt-8 text-sm font-bold">工作目录</h2>
       <label className="mt-2 block text-xs text-neutral-500">授权根目录</label>
       <input
         className="mt-1 w-full max-w-xl rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
@@ -67,27 +131,28 @@ export default function SettingsPage() {
           所有文件操作仅限该目录内，执行前必须经你确认。
         </p>
       </div>
-      <button
-        className="mt-4 rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-        disabled={busy || root.trim() === ""}
-        onClick={saveAndScan}
-      >
-        {busy ? "扫描中…" : "保存并扫描"}
-      </button>
 
-      <h2 className="mt-8 text-sm font-bold">模型与接口</h2>
-      {workspace.hasApiKey ? (
-        <div className="mt-2 rounded bg-green-50 px-3 py-2 text-xs text-green-700">
-          模型：`{workspace.model || "未返回"}` · 接口：本地配置（.env）
-        </div>
-      ) : (
-        <div className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">
-          未配置模型：请在安装目录的 .env 中填写 SORTA_MODEL 与 SORTA_API_KEY。
-        </div>
-      )}
-      <p className="mt-2 text-xs text-neutral-400">
+      <div className="mt-4 flex gap-2">
+        <button
+          className="rounded border border-neutral-300 px-4 py-2 text-sm font-medium disabled:opacity-50"
+          disabled={busy !== ""}
+          onClick={() => save(false)}
+        >
+          {busy === "save" ? "保存中…" : "保存设置"}
+        </button>
+        <button
+          className="rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          disabled={busy !== "" || root.trim() === ""}
+          onClick={() => save(true)}
+        >
+          {busy === "scan" ? "扫描中…" : "保存并扫描"}
+        </button>
+      </div>
+
+      <h2 className="mt-8 text-sm font-bold">关于</h2>
+      <p className="mt-2 max-w-xl text-xs text-neutral-400">
         扫描会话有效期 1 小时；所有文件操作仅限授权目录内，执行前必须经你确认；
-        数据保存在本机 SQLite，不上传。
+        数据保存在本机 SQLite，不上传。模型配置保存后立即生效，无需重启。
       </p>
 
       {message && (

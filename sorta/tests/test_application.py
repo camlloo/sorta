@@ -21,8 +21,9 @@ def service_env(tmp_path):
     (root / "b.txt").write_text("world", encoding="utf-8", newline="\n")
     (root / "dup1.bin").write_bytes(b"\x00\x01\x02dup")
     (root / "dup2.bin").write_bytes(b"\x00\x01\x02dup")
-    config = SortaConfig()
-    engine = create_db_engine("sqlite://")
+    # 用临时文件库：设置文件（ui_settings.json）随库路径隔离，不碰真实数据
+    config = SortaConfig(db_url=f"sqlite:///{tmp_path / 'test.db'}")
+    engine = create_db_engine(config.db_url)
     init_db(engine)
     store = PlanStore(engine)
     service = SortaService(config=config, store=store)
@@ -157,3 +158,34 @@ def test_settings_roundtrip(service_env):
     assert "has_api_key" in settings
     # 设置文件落在数据库同目录（JSON）
     assert service_env.service._settings_file().name == "ui_settings.json"
+
+
+def test_model_settings_roundtrip_and_env_fallback(service_env, monkeypatch):
+    """模型配置存设置文件且优先于环境变量；密钥只回显脱敏提示。"""
+    service = service_env.service
+    monkeypatch.setenv("SORTA_MODEL", "env-model")
+    monkeypatch.setenv("SORTA_API_KEY", "sk-env-key-12345678")
+
+    # 无设置文件：回退到环境变量
+    settings = service.get_settings()
+    assert settings["model"] == "env-model"
+    assert settings["has_api_key"] is True
+
+    # 保存 UI 配置：覆盖环境变量；api_key 缺省保持不变
+    service.save_settings(model="qwen3.8-flash", base_url="https://example.com/v1")
+    settings = service.get_settings()
+    assert settings["model"] == "qwen3.8-flash"
+    assert settings["base_url"] == "https://example.com/v1"
+    assert settings["has_api_key"] is True
+    assert settings["api_key_hint"].startswith("sk-")
+    assert settings["api_key_hint"].endswith("5678")
+    assert "****" in settings["api_key_hint"]
+    assert "api_key" not in settings  # 明文密钥绝不返回
+
+    # get_llm_config 供后端调用：返回明文
+    llm_cfg = service.get_llm_config()
+    assert llm_cfg["api_key"] == "sk-env-key-12345678"
+
+    # 用户输入新密钥则覆盖
+    service.save_settings(api_key="sk-new-key-99999999")
+    assert service.get_llm_config()["api_key"] == "sk-new-key-99999999"

@@ -353,35 +353,79 @@ class SortaService:
 
     # ---- 设置 -----------------------------------------------------------------
 
-    def get_settings(self) -> dict[str, Any]:
+    # ---- LLM 配置（设置页可配，优先级：设置文件 > 环境变量） -----------------
+
+    def _read_settings(self) -> dict[str, Any]:
+        import json
+
         settings_file = self._settings_file()
-        saved: dict[str, Any] = {}
         if settings_file.exists():
             try:
-                import json
-
-                saved = json.loads(settings_file.read_text(encoding="utf-8"))
+                return json.loads(settings_file.read_text(encoding="utf-8"))
             except (OSError, ValueError):
-                saved = {}
+                return {}
+        return {}
+
+    def get_llm_config(self) -> dict[str, str]:
+        """运行时读取当前模型配置；空字段回退到环境变量（.env 兼容）。"""
+        saved = self._read_settings()
         return {
-            "root": saved.get("root", ""),
-            "privacy": saved.get("privacy", self.config.default_privacy),
-            "model": os.environ.get("SORTA_MODEL", ""),
-            "base_url": os.environ.get("SORTA_BASE_URL", ""),
-            "has_api_key": bool(os.environ.get("SORTA_API_KEY")),
+            "model": saved.get("model") or os.environ.get("SORTA_MODEL", ""),
+            "base_url": saved.get("base_url") or os.environ.get("SORTA_BASE_URL", ""),
+            "api_key": saved.get("api_key") or os.environ.get("SORTA_API_KEY", ""),
+        }
+
+    @staticmethod
+    def _mask_key(api_key: str) -> str:
+        if not api_key:
+            return ""
+        if len(api_key) < 8:
+            return "已配置"
+        return f"{api_key[:3]}****{api_key[-4:]}"
+
+    def get_settings(self) -> dict[str, Any]:
+        llm = self.get_llm_config()
+        api_key = llm["api_key"]
+        return {
+            "root": self._read_settings().get("root", ""),
+            "privacy": self._read_settings().get("privacy", self.config.default_privacy),
+            "model": llm["model"],
+            "base_url": llm["base_url"],
+            "has_api_key": bool(api_key),
+            "api_key_hint": self._mask_key(api_key),
             "scan_session_ttl_seconds": self.config.scan_session_ttl_seconds,
             "database_url": self.config.db_url or "系统数据目录",
         }
 
-    def save_settings(self, *, root: str, privacy: str) -> None:
+    def save_settings(
+        self,
+        *,
+        root: str | None = None,
+        privacy: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+    ) -> dict[str, Any]:
+        """增量保存设置。api_key 为 None/空串表示保持现有密钥不变（不回显）。"""
         import json
 
+        saved = self._read_settings()
+        if root is not None:
+            saved["root"] = root
+        if privacy is not None:
+            saved["privacy"] = privacy
+        if model is not None:
+            saved["model"] = model.strip()
+        if base_url is not None:
+            saved["base_url"] = base_url.strip()
+        if api_key:  # 仅在用户输入了新密钥时覆盖
+            saved["api_key"] = api_key.strip()
         settings_file = self._settings_file()
         settings_file.parent.mkdir(parents=True, exist_ok=True)
         settings_file.write_text(
-            json.dumps({"root": root, "privacy": privacy}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+            json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        return self.get_settings()
 
     def _settings_file(self) -> Path:
         from sorta.storage import default_db_url

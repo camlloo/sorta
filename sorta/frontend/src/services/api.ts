@@ -94,6 +94,7 @@ export interface Settings {
   model: string;
   base_url: string;
   has_api_key: boolean;
+  api_key_hint: string;
   scan_session_ttl_seconds: number;
   database_url: string;
 }
@@ -201,8 +202,13 @@ export const api = {
     request<ExecutionDetail>(`/api/v1/executions/${executionId}/undo`, { method: "POST" }),
   history: () => request<{ executions: HistoryEntry[] }>("/api/v1/history"),
   getSettings: () => request<Settings>("/api/v1/settings"),
-  saveSettings: (body: { root?: string; privacy?: string }) =>
-    request<Settings>("/api/v1/settings", { method: "PUT", body: JSON.stringify(body) }),
+  saveSettings: (body: {
+    root?: string;
+    privacy?: string;
+    model?: string;
+    base_url?: string;
+    api_key?: string;
+  }) => request<Settings>("/api/v1/settings", { method: "PUT", body: JSON.stringify(body) }),
 };
 
 export const CAPABILITIES = [
