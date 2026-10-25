@@ -80,6 +80,28 @@ class OpenAICompatClient:
         ]
         return LLMResponse(content=message.content, tool_calls=calls)
 
+    def stream_chat(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ):
+        """流式对话：逐段 yield 文本增量（无工具调用场景，如问答）。"""
+        stream = self._client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tools or None,
+            tool_choice="auto" if tools else None,
+            stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+
 
 def system_message(text: str) -> dict[str, Any]:
     return {"role": "system", "content": text}

@@ -233,6 +233,55 @@ export const api = {
         conversation_id: conversationId,
       }),
     }),
+  streamTask: async (
+    body: {
+      scan_id: string;
+      request: string;
+      task_type: "auto" | "find" | "ask" | "organize";
+      template_id: number | null;
+      conversation_id: number | null;
+    },
+    onEvent: (event: StreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const res = await fetch("/api/v1/tasks/stream", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-SORTA-Token": token,
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok) {
+      const errBody = (await res.json().catch(() => ({}))) as {
+        code?: string;
+        message?: string;
+      };
+      throw new ApiError(
+        errBody.code ?? "HTTP_ERROR",
+        errBody.message ?? res.statusText,
+        res.status,
+        {},
+      );
+    }
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop() ?? "";
+      for (const part of parts) {
+        const line = part.trim();
+        if (line.startsWith("data: ")) {
+          onEvent(JSON.parse(line.slice(6)) as StreamEvent);
+        }
+      }
+    }
+  },
   listConversations: () =>
     request<{ conversations: Conversation[] }>("/api/v1/conversations"),
   createConversation: (scanId: string) =>
@@ -334,6 +383,23 @@ export interface ChatMessageRecord {
   content: string;
   created_at: number;
 }
+
+export type StreamEvent =
+  | { type: "classify"; task_type: string }
+  | { type: "delta"; text: string }
+  | {
+      type: "done";
+      task_type: "ask";
+      conversation_id: number | null;
+      answer: string;
+    }
+  | { type: "clarify"; question: string; conversation_id: number | null }
+  | {
+      type: "find";
+      conversation_id: number | null;
+      result: Extract<TaskResult, { task_type: "find" }>;
+    }
+  | { type: "organize"; conversation_id: number };
 
 export interface Template {
   id: number;

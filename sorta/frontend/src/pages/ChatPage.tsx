@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useWorkspace } from "../App";
+import Markdown from "../components/Markdown";
 import PlanPanel from "../components/PlanPanel";
 import {
   api,
@@ -7,6 +8,7 @@ import {
   type ExecutionDetail,
   type JobSnapshot,
   type PlanDetail,
+  type StreamEvent,
   type Template,
 } from "../services/api";
 
@@ -71,6 +73,7 @@ export default function ChatPage() {
   const [toolEvents, setToolEvents] = useState<string[]>(() => load(KEY.toolEvents, []));
   const [planning, setPlanning] = useState<boolean>(() => !!sessionStorage.getItem(KEY.jobId));
   const [jobId, setJobId] = useState<string | null>(() => sessionStorage.getItem(KEY.jobId));
+  const abortRef = useRef<AbortController | null>(null);
   const [lastExecution, setLastExecution] = useState<ExecutionDetail | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templateId, setTemplateId] = useState<number | null>(null);
@@ -262,6 +265,7 @@ export default function ChatPage() {
       setPlanning(true);
       setToolEvents([]);
       setLastExecution(null);
+      abortRef.current = new AbortController();
 
       const reviseMode = plan !== null && !lastExecution;
       const prevPlan = plan;
@@ -280,27 +284,100 @@ export default function ChatPage() {
         if (list) setConversations(list.conversations);
       }
 
-      try {
-        const { job_id } = reviseMode
-          ? await api.revisePlan(plan!.plan_id, clean, plan!.version)
-          : await api.createTask(
-              workspace.scanId,
-              clean,
-              taskType,
-              templateId,
-              workspace.privacy,
-              cid,
-            );
+      const runJob = async (explicitType: "auto" | "find" | "ask" | "organize") => {
+        if (!workspace.scanId) return;
+        const { job_id } = await api.createTask(
+          workspace.scanId,
+          clean,
+          explicitType,
+          templateId,
+          workspace.privacy,
+          cid,
+        );
         setJobId(job_id);
         sessionStorage.setItem(KEY.jobId, job_id);
         const snapshot = await pollJob(job_id);
-        finishTask(snapshot, reviseMode ? "revise" : "new", reviseMode ? prevPlan : null, cid);
+        finishTask(snapshot, "new", null, cid);
+      };
+
+      const patchLast = (content: string) =>
+        setMessages((m) => {
+          const next = [...m];
+          if (next.length > 0 && next[next.length - 1].role === "assistant") {
+            next[next.length - 1] = { role: "assistant", content };
+          } else {
+            next.push({ role: "assistant", content });
+          }
+          return next;
+        });
+
+      try {
+        if (reviseMode) {
+          const { job_id } = await api.revisePlan(plan!.plan_id, clean, plan!.version);
+          setJobId(job_id);
+          sessionStorage.setItem(KEY.jobId, job_id);
+          const snapshot = await pollJob(job_id);
+          finishTask(snapshot, "revise", prevPlan, cid);
+        } else if (taskType === "find" || taskType === "organize") {
+          await runJob(taskType);
+        } else {
+          // auto / ask：流式（SSE）——分类在服务端完成，organize 自动转 job
+          setMessages((m) => [...m, { role: "assistant", content: "" }]);
+          let streamed = "";
+          let redirected = false;
+          await api.streamTask(
+            {
+              scan_id: workspace.scanId,
+              request: clean,
+              task_type: "auto",
+              template_id: templateId,
+              conversation_id: cid,
+            },
+            (event: StreamEvent) => {
+              if (event.type === "delta") {
+                streamed += event.text;
+                patchLast(streamed);
+              } else if (event.type === "clarify") {
+                patchLast(event.question);
+              } else if (event.type === "find") {
+                const r = event.result;
+                const lines =
+                  r.matches.length === 0
+                    ? ["没有匹配的文件。"]
+                    : r.matches.map((mm) => `${mm.path} — ${mm.reason}`);
+                patchLast(`${r.note}\n${lines.join("\n")}`);
+              } else if (event.type === "organize") {
+                redirected = true;
+              }
+            },
+            abortRef.current?.signal,
+          );
+          if (redirected) {
+            setMessages((m) => {
+              const next = [...m];
+              if (next.length > 0 && next[next.length - 1].role === "assistant") next.pop();
+              return next;
+            });
+            await runJob("organize");
+          } else {
+            // ask/clarify/find 流式完成：复位输入状态（会话消息已由服务端落库）
+            setPlanning(false);
+            setJobId(null);
+            sessionStorage.removeItem(KEY.jobId);
+            const list = await api.listConversations().catch(() => null);
+            if (list) setConversations(list.conversations);
+          }
+        }
       } catch (err) {
-        await refreshMessages(cid).catch(() => undefined);
-        setMessages((m) => [
-          ...m,
-          { role: "assistant", content: `处理失败：${(err as Error).message}` },
-        ]);
+        if ((err as Error).name === "AbortError") {
+          setMessages((m) => [...m, { role: "system", content: "— 已取消 —" }]);
+        } else {
+          await refreshMessages(cid).catch(() => undefined);
+          setMessages((m) => [
+            ...m,
+            { role: "assistant", content: `处理失败：${(err as Error).message}` },
+          ]);
+        }
         setPlanning(false);
         setJobId(null);
         sessionStorage.removeItem(KEY.jobId);
@@ -310,6 +387,7 @@ export default function ChatPage() {
   );
 
   const cancelPlanning = useCallback(async () => {
+    abortRef.current?.abort();
     if (jobId) await api.cancelJob(jobId).catch(() => undefined);
   }, [jobId]);
 
@@ -429,7 +507,15 @@ export default function ChatPage() {
                       {msg.role === "assistant" && (
                         <div className="eyebrow mb-1">SORTA</div>
                       )}
-                      {msg.content}
+                      {msg.role === "assistant" ? (
+                        msg.content ? (
+                          <Markdown text={msg.content} />
+                        ) : (
+                          <span className="animate-pulse text-graphite">…</span>
+                        )
+                      ) : (
+                        msg.content
+                      )}
                     </div>
                   </div>
                 ),

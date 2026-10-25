@@ -454,6 +454,33 @@ def create_task(body: TaskRequest, request: Request) -> dict:
     return {"job_id": job_id}
 
 
+@tasks_router.post("/api/v1/tasks/stream")
+def stream_task(body: TaskRequest, request: Request) -> Any:
+    """流式任务入口（SSE）：ask 逐字推送；organize 返回信号转 job 通道。"""
+    import json as _json
+
+    from fastapi.responses import StreamingResponse
+
+    model, llm = make_llm(request)
+    service = request.app.state.service
+    privacy = service.get_settings()["privacy"]
+
+    def gen():
+        for event in service.stream_task(
+            body.scan_id,
+            body.request,
+            task_type=body.task_type,
+            template_id=body.template_id,
+            privacy=privacy,
+            model=model,
+            llm=llm,
+            conversation_id=body.conversation_id,
+        ):
+            yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
 # ---- 对话会话（多轮持久化） ------------------------------------------------------
 
 conversations_router = APIRouter(dependencies=[Depends(require_token)])
