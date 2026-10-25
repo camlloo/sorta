@@ -43,6 +43,12 @@ class TaskRequest(BaseModel):
     request: str = Field(min_length=1)
     task_type: str = "auto"  # auto / find / ask / organize
     template_id: int | None = None
+    conversation_id: int | None = None
+
+
+class ConversationCreateRequest(BaseModel):
+    scan_id: str = Field(min_length=1)
+    title: str = ""
 
 
 class TemplateCreateRequest(BaseModel):
@@ -441,10 +447,47 @@ def create_task(body: TaskRequest, request: Request) -> dict:
             model=model,
             llm=llm,
             cancel_event=cancel_event,
+            conversation_id=body.conversation_id,
         )
 
     job_id = jobs.submit("task", _run)
     return {"job_id": job_id}
+
+
+# ---- 对话会话（多轮持久化） ------------------------------------------------------
+
+conversations_router = APIRouter(dependencies=[Depends(require_token)])
+
+
+@conversations_router.get("/api/v1/conversations")
+def list_conversations(request: Request) -> dict:
+    return {"conversations": request.app.state.service.list_conversations()}
+
+
+@conversations_router.post("/api/v1/conversations")
+def create_conversation(body: ConversationCreateRequest, request: Request) -> dict:
+    # 校验 scan 会话有效（与会话绑定）
+    request.app.state.service._ensure_session(body.scan_id)
+    return request.app.state.service.create_conversation(body.scan_id, body.title)
+
+
+@conversations_router.get("/api/v1/conversations/{conversation_id}/messages")
+def get_messages(conversation_id: int, request: Request) -> dict:
+    service = request.app.state.service
+    messages = service.get_messages(conversation_id)
+    conversations = {c["id"]: c for c in service.list_conversations(limit=200)}
+    conversation = conversations.get(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail={
+            "code": "CONVERSATION_NOT_FOUND", "message": "会话不存在",
+        })
+    return {"conversation": conversation, "messages": messages}
+
+
+@conversations_router.delete("/api/v1/conversations/{conversation_id}")
+def delete_conversation(conversation_id: int, request: Request) -> dict:
+    request.app.state.service.delete_conversation(conversation_id)
+    return {"deleted": True}
 
 
 # ---- 整理模板（EXT-01） --------------------------------------------------------
@@ -521,6 +564,7 @@ ALL_ROUTERS = (
     plans_router,
     tasks_router,
     templates_router,
+    conversations_router,
     executions_router,
 )
 

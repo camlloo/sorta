@@ -6,7 +6,7 @@ storage 层显式转换，ORM 对象不越过 storage 层。
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, BigInteger, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -40,6 +40,36 @@ class FileRegistryRow(Base):
     extension: Mapped[str] = mapped_column(String(32), default="")
     size: Mapped[int] = mapped_column(BigInteger)
     modified_ns: Mapped[int] = mapped_column(BigInteger)
+
+
+class ConversationRow(Base):
+    """对话会话：一次连续多轮任务的载体（多轮对话持久化）。"""
+
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    scan_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("scan_sessions.id"), index=True, nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[float] = mapped_column(BigInteger)
+    updated_at: Mapped[float] = mapped_column(BigInteger)
+
+
+class MessageRow(Base):
+    """对话消息：随轮次落库，供跨会话恢复与多轮上下文构建。"""
+
+    __tablename__ = "messages"
+    __table_args__ = (Index("ix_messages_conversation_seq", "conversation_id", "seq"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    seq: Mapped[int] = mapped_column(default=0)
+    role: Mapped[str] = mapped_column(String(16))  # user / assistant / system
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[float] = mapped_column(BigInteger)
 
 
 class TemplateRow(Base):

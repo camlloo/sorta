@@ -29,6 +29,7 @@ class SortaConfig:
     default_privacy: str = "ask_before_content"
     include_hidden: bool = False
     scan_session_ttl_seconds: int = 3_600
+    conversation_history_messages: int = 8
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> SortaConfig:
@@ -71,5 +72,8 @@ class SortaConfig:
             include_hidden=get_bool("SORTA_INCLUDE_HIDDEN", cls.include_hidden),
             scan_session_ttl_seconds=get_int(
                 "SORTA_SCAN_SESSION_TTL", cls.scan_session_ttl_seconds
+            ),
+            conversation_history_messages=get_int(
+                "SORTA_HISTORY_MESSAGES", cls.conversation_history_messages
             ),
         )

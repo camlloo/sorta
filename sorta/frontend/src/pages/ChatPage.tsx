@@ -3,10 +3,10 @@ import { useWorkspace } from "../App";
 import PlanPanel from "../components/PlanPanel";
 import {
   api,
+  type Conversation,
   type ExecutionDetail,
   type JobSnapshot,
   type PlanDetail,
-  type TaskResult,
   type Template,
 } from "../services/api";
 
@@ -19,10 +19,10 @@ interface ChatMessage {
  * 状态持久化与任务分流逻辑见 EXT-02 / UX-05。 */
 
 const KEY = {
-  messages: "sorta_chat_messages",
   planId: "sorta_plan_id",
   toolEvents: "sorta_tool_events",
   jobId: "sorta_job_id",
+  conversationId: "sorta_conversation_id",
 };
 
 function load<T>(key: string, fallback: T): T {
@@ -33,42 +33,6 @@ function load<T>(key: string, fallback: T): T {
   } catch {
     return fallback;
   }
-}
-
-function diffPlans(oldOps: PlanDetail["operations"], newOps: PlanDetail["operations"]) {
-  const oldBySource = new Map(oldOps.map((o) => [o.source_id, o]));
-  let added = 0;
-  let removed = 0;
-  let changed = 0;
-  for (const op of newOps) {
-    const prev = oldBySource.get(op.source_id);
-    if (!prev) added += 1;
-    else if (prev.destination !== op.destination || prev.action !== op.action) changed += 1;
-  }
-  for (const op of oldOps) {
-    if (!newOps.some((n) => n.source_id === op.source_id)) removed += 1;
-  }
-  return { added, removed, changed };
-}
-
-function findMatchesText(result: Extract<TaskResult, { task_type: "find" }>): string {
-  const lines =
-    result.matches.length === 0
-      ? ["没有匹配的文件。"]
-      : result.matches.map((m) => `${m.path} — ${m.reason}`);
-  return `${result.note}\n${lines.join("\n")}`;
-}
-
-function taskResultMessage(result: TaskResult, toolEvents: string[]): string {
-  if (result.task_type === "organize") return "";
-  if (result.task_type === "find") {
-    return `${findMatchesText(result)}\n检索了 ${result.scanned} 个文件的文件名，${toolEvents.length} 次只读工具调用。`;
-  }
-  if (result.task_type === "ask") {
-    const refs = result.references.length ? `\n\n涉及文件：${result.references.join("、")}` : "";
-    return `${result.answer}${refs}`;
-  }
-  return result.question;
 }
 
 const COMMANDS = [
@@ -96,7 +60,12 @@ const COMMANDS = [
 
 export default function ChatPage() {
   const workspace = useWorkspace();
-  const [messages, setMessages] = useState<ChatMessage[]>(() => load(KEY.messages, []));
+  const [conversationId, setConversationId] = useState<number | null>(() => {
+    const raw = localStorage.getItem(KEY.conversationId);
+    return raw ? Number(raw) : null;
+  });
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [plan, setPlan] = useState<PlanDetail | null>(null);
   const [toolEvents, setToolEvents] = useState<string[]>(() => load(KEY.toolEvents, []));
@@ -123,11 +92,48 @@ export default function ChatPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // UX-05：状态持久化
+  // UX-05：工具日志持久化；消息以数据库为源（跨关闭保留）
   useEffect(() => {
-    sessionStorage.setItem(KEY.messages, JSON.stringify(messages));
     sessionStorage.setItem(KEY.toolEvents, JSON.stringify(toolEvents));
-  }, [messages, toolEvents]);
+  }, [toolEvents]);
+
+  useEffect(() => {
+    if (!workspace.hasApiKey) return;
+    api
+      .listConversations()
+      .then((data) => setConversations(data.conversations))
+      .catch(() => undefined);
+  }, [workspace.hasApiKey]);
+
+  useEffect(() => {
+    if (conversationId === null) {
+      localStorage.removeItem(KEY.conversationId);
+      setMessages([]);
+      return;
+    }
+    localStorage.setItem(KEY.conversationId, String(conversationId));
+    api
+      .getMessages(conversationId)
+      .then((data) =>
+        setMessages(data.messages.map((m) => ({ role: m.role, content: m.content }))),
+      )
+      .catch(() => {
+        localStorage.removeItem(KEY.conversationId);
+        setConversationId(null);
+      });
+  }, [conversationId]);
+
+  const refreshMessages = useCallback(async (cid: number | null) => {
+    if (cid === null) return;
+    try {
+      const data = await api.getMessages(cid);
+      setMessages(data.messages.map((m) => ({ role: m.role, content: m.content })));
+      const list = await api.listConversations();
+      setConversations(list.conversations);
+    } catch {
+      /* 会话被删等场景静默 */
+    }
+  }, []);
 
   useEffect(() => {
     if (workspace.hasApiKey && templates.length === 0) {
@@ -202,7 +208,13 @@ export default function ChatPage() {
   );
 
   const finishTask = useCallback(
-    (snapshot: JobSnapshot, mode: "new" | "revise", prevPlan: PlanDetail | null) => {
+    (
+      snapshot: JobSnapshot,
+      _mode: "new" | "revise",
+      _prevPlan: PlanDetail | null,
+      currentConversationId: number | null,
+    ) => {
+      const refresh = () => void refreshMessages(currentConversationId);
       if (snapshot.status === "completed" && snapshot.result) {
         const result = snapshot.result;
         if (result.task_type === "organize") {
@@ -210,35 +222,10 @@ export default function ChatPage() {
             .getPlan(result.plan_id)
             .then((detail) => {
               setPlan(detail);
-              if (mode === "new") {
-                setMessages((m) => [
-                  ...m,
-                  {
-                    role: "assistant",
-                    content:
-                      `${detail.summary}\n\n${snapshot.tool_events.length} 次只读工具调用，` +
-                      `生成 ${detail.operations.length} 项操作。右侧台账待你确认——` +
-                      "确认之前不会改动任何文件。" +
-                      (detail.uncertain_names.length
-                        ? `另有 ${detail.uncertain_names.length} 个文件证据不足，已列入待确认。`
-                        : ""),
-                  },
-                ]);
-              } else if (prevPlan) {
-                const d = diffPlans(prevPlan.operations, detail.operations);
-                setMessages((m) => [
-                  ...m,
-                  {
-                    role: "assistant",
-                    content:
-                      `计划已更新到 v${detail.version}：新增 ${d.added} 项、移除 ${d.removed} 项、` +
-                      `调整 ${d.changed} 项目标。原审批已失效，请在右侧重新确认。`,
-                  },
-                ]);
-              }
               sessionStorage.setItem(KEY.planId, JSON.stringify(result.plan_id));
               void workspace.refreshFiles(result.scan_id);
             })
+            .then(refresh)
             .catch((err: Error) => {
               setMessages((m) => [
                 ...m,
@@ -248,16 +235,14 @@ export default function ChatPage() {
         } else {
           setPlan(null);
           sessionStorage.removeItem(KEY.planId);
-          setMessages((m) => [
-            ...m,
-            { role: "assistant", content: taskResultMessage(result, snapshot.tool_events) },
-          ]);
+          refresh();
         }
       } else if (snapshot.status === "failed") {
         setMessages((m) => [
           ...m,
           { role: "assistant", content: `处理失败：${snapshot.error?.message ?? "未知错误"}` },
         ]);
+        refresh();
       } else {
         setMessages((m) => [...m, { role: "assistant", content: "已取消本次任务。" }]);
       }
@@ -265,7 +250,7 @@ export default function ChatPage() {
       setJobId(null);
       sessionStorage.removeItem(KEY.jobId);
     },
-    [workspace],
+    [workspace, refreshMessages],
   );
 
   const send = useCallback(
@@ -285,15 +270,33 @@ export default function ChatPage() {
         sessionStorage.removeItem(KEY.planId);
       }
 
+      // 无会话则先创建（多轮对话载体；跨关闭保留在数据库）
+      let cid = conversationId;
+      if (!reviseMode && cid === null) {
+        const conv = await api.createConversation(workspace.scanId);
+        cid = conv.id;
+        setConversationId(cid);
+        const list = await api.listConversations().catch(() => null);
+        if (list) setConversations(list.conversations);
+      }
+
       try {
         const { job_id } = reviseMode
           ? await api.revisePlan(plan!.plan_id, clean, plan!.version)
-          : await api.createTask(workspace.scanId, clean, taskType, templateId, workspace.privacy);
+          : await api.createTask(
+              workspace.scanId,
+              clean,
+              taskType,
+              templateId,
+              workspace.privacy,
+              cid,
+            );
         setJobId(job_id);
         sessionStorage.setItem(KEY.jobId, job_id);
         const snapshot = await pollJob(job_id);
-        finishTask(snapshot, reviseMode ? "revise" : "new", reviseMode ? prevPlan : null);
+        finishTask(snapshot, reviseMode ? "revise" : "new", reviseMode ? prevPlan : null, cid);
       } catch (err) {
+        await refreshMessages(cid).catch(() => undefined);
         setMessages((m) => [
           ...m,
           { role: "assistant", content: `处理失败：${(err as Error).message}` },
@@ -303,21 +306,18 @@ export default function ChatPage() {
         sessionStorage.removeItem(KEY.jobId);
       }
     },
-    [planningBlocked, workspace, plan, lastExecution, templateId, pollJob, finishTask],
+    [planningBlocked, workspace, plan, lastExecution, templateId, pollJob, finishTask, conversationId, refreshMessages],
   );
 
   const cancelPlanning = useCallback(async () => {
     if (jobId) await api.cancelJob(jobId).catch(() => undefined);
   }, [jobId]);
 
-  const startNewTask = useCallback(() => {
+  const switchConversation = useCallback((id: number | null) => {
     setPlan(null);
     setToolEvents([]);
     setLastExecution(null);
-    setMessages((m) => [
-      ...m,
-      { role: "system", content: "— 已开始新任务（原计划保留在数据库中，可在历史中查看）—" },
-    ]);
+    setConversationId(id);
   }, []);
 
   return (
@@ -337,14 +337,38 @@ export default function ChatPage() {
               <span className="font-mono text-[10px] text-graphite">PRIVACY / ASK-FIRST</span>
             )}
           </div>
-          {canRevise && (
-            <button
-              className="border border-rule px-2 py-1 text-[11px] font-medium transition-colors duration-100 hover:border-ink hover:bg-ink hover:text-paper"
-              onClick={startNewTask}
+          <div className="flex items-center gap-2">
+            <select
+              className="max-w-[180px] truncate border border-rule px-2 py-1 font-mono text-[11px] focus:border-ink focus:outline-none"
+              value={conversationId ?? ""}
+              onChange={(e) =>
+                switchConversation(e.target.value ? Number(e.target.value) : null)
+              }
+              title="对话历史（保存在本机数据库）"
             >
-              新建任务
-            </button>
-          )}
+              <option value="">新对话</option>
+              {conversations.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.title}
+                </option>
+              ))}
+            </select>
+            {conversationId !== null && (
+              <button
+                className="border border-rule px-2 py-1 font-mono text-[10px] transition-colors duration-100 hover:border-signal hover:text-signal"
+                title="删除当前对话（不影响计划与执行历史）"
+                onClick={async () => {
+                  if (!window.confirm("删除当前对话记录？此操作不可恢复。")) return;
+                  await api.deleteConversation(conversationId).catch(() => undefined);
+                  const list = await api.listConversations().catch(() => null);
+                  if (list) setConversations(list.conversations);
+                  switchConversation(null);
+                }}
+              >
+                删除
+              </button>
+            )}
+          </div>
         </div>
         {planning && <div className="marquee-line" aria-hidden />}
 

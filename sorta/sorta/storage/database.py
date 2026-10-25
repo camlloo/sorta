@@ -53,7 +53,7 @@ def init_db(engine: Engine) -> None:
     _run_migrations(engine)
 
 
-_LATEST_SCHEMA_VERSION = 2
+_LATEST_SCHEMA_VERSION = 3
 
 
 def _run_migrations(engine: Engine) -> None:
@@ -124,9 +124,23 @@ def _migrate_2_seed_templates(engine: Engine) -> None:
                 )
 
 
+def _migrate_3_add_conversations(engine: Engine) -> None:
+    """v3：多轮对话表（conversations / messages）。create_all 已建新库；旧库补建。"""
+    from sorta.storage.models import Base
+
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            Base.metadata.tables["conversations"],
+            Base.metadata.tables["messages"],
+        ],
+    )
+
+
 _MIGRATIONS = {
     1: _migrate_1_add_plan_version,
     2: _migrate_2_seed_templates,
+    3: _migrate_3_add_conversations,
 }
 
 

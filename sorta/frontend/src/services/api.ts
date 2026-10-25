@@ -220,6 +220,7 @@ export const api = {
     taskType: "auto" | "find" | "ask" | "organize",
     templateId: number | null,
     privacy: string,
+    conversationId: number | null,
   ) =>
     request<{ job_id: string }>("/api/v1/tasks", {
       method: "POST",
@@ -229,7 +230,23 @@ export const api = {
         task_type: taskType,
         template_id: templateId,
         privacy,
+        conversation_id: conversationId,
       }),
+    }),
+  listConversations: () =>
+    request<{ conversations: Conversation[] }>("/api/v1/conversations"),
+  createConversation: (scanId: string) =>
+    request<Conversation>("/api/v1/conversations", {
+      method: "POST",
+      body: JSON.stringify({ scan_id: scanId }),
+    }),
+  getMessages: (conversationId: number) =>
+    request<{ conversation: Conversation; messages: ChatMessageRecord[] }>(
+      `/api/v1/conversations/${conversationId}/messages`,
+    ),
+  deleteConversation: (conversationId: number) =>
+    request<{ deleted: boolean }>(`/api/v1/conversations/${conversationId}`, {
+      method: "DELETE",
     }),
   listTemplates: () =>
     request<{ templates: Template[] }>("/api/v1/templates"),
@@ -302,6 +319,20 @@ export interface ConnectionTestResult {
   model: string;
   base_url: string;
   checks: { chat: ConnectionCheck; tools: ConnectionCheck };
+}
+
+export interface Conversation {
+  id: number;
+  scan_id: string;
+  title: string;
+  updated_at: number;
+}
+
+export interface ChatMessageRecord {
+  seq: number;
+  role: "user" | "assistant" | "system";
+  content: string;
+  created_at: number;
 }
 
 export interface Template {
