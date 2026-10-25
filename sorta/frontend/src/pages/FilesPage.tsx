@@ -1,44 +1,33 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useWorkspace } from "../App";
-import {
-  api,
-  formatEpoch,
-  formatSize,
-  type FileRow,
-  type HistoryEntry,
-} from "../services/api";
+import { api, formatEpoch, formatSize, type FileRow } from "../services/api";
 
-/** 示意图 ③ 文件库：索引表 + 搜索 + 详情/预览/总结 + 重复检测 + 历史撤销。 */
+/** 示意图 ③ 文件库（UX-03/04）：索引表 + 搜索 + 详情/预览/总结（隐私门）+
+ * 重复检测（覆盖范围）+ 扫描范围提示与重新扫描。历史已独立为「历史」页。 */
 
 export default function FilesPage() {
   const workspace = useWorkspace();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ status: string; content: string | null; error: string | null } | null>(null);
+  const [preview, setPreview] = useState<{
+    status: string;
+    content: string | null;
+    error: string | null;
+  } | null>(null);
   const [summary, setSummary] = useState("");
   const [dupGroups, setDupGroups] = useState<string[][] | null>(null);
+  const [dupScope, setDupScope] = useState<{ checked: number; skipped: number } | null>(null);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [undoChoice, setUndoChoice] = useState<string | null>(null);
-
-  const refreshHistory = useCallback(async () => {
-    if (!workspace.scanId) return;
-    try {
-      const data = await api.history();
-      setHistory(data.executions);
-    } catch {
-      /* 历史为空或会话过期时忽略 */
-    }
-  }, [workspace.scanId]);
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     setSelected(null);
     setPreview(null);
     setSummary("");
     setDupGroups(null);
-    void refreshHistory();
-  }, [workspace.scanId, refreshHistory]);
+    setDupScope(null);
+  }, [workspace.scanId]);
 
   if (!workspace.scanId) {
     return (
@@ -56,6 +45,27 @@ export default function FilesPage() {
   );
   const selectedFile = files.find((f) => f.path === selected) ?? null;
 
+  async function rescan() {
+    if (!workspace.scanId) return;
+    setBusy("rescan");
+    setMessage("");
+    try {
+      const info = await api.rescanWorkspace(workspace.scanId);
+      workspace.setWorkspace(info);
+      setMessage(
+        `已重新扫描：${info.file_count} 个文件` +
+          (info.has_more ? `（还有更多未加载）` : "") +
+          (info.skipped_directories.length
+            ? `；跳过目录：${info.skipped_directories.join("、")}`
+            : ""),
+      );
+    } catch (err) {
+      setMessage((err as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function doPreview() {
     if (!selectedFile || !workspace.scanId) return;
     setBusy("preview");
@@ -69,15 +79,27 @@ export default function FilesPage() {
     }
   }
 
-  async function doSummarize() {
+  async function doSummarize(confirm = false) {
     if (!selectedFile || !workspace.scanId) return;
     setBusy("summarize");
     setMessage("");
+    setNotice("");
     try {
-      const data = await api.summarizeFile(workspace.scanId, selectedFile.file_id);
+      const data = await api.summarizeFile(workspace.scanId, selectedFile.file_id, confirm);
       setSummary(data.summary);
     } catch (err) {
-      setMessage((err as Error).message);
+      const apiErr = err as Error & { code?: string };
+      if (apiErr.code === "CONSENT_REQUIRED") {
+        // UX-03：ask_before_content 单次授权——展示文件、原因与上限后请求确认
+        const confirmed = window.confirm(`${apiErr.message}\n\n是否允许本次读取？`);
+        if (confirmed) {
+          await doSummarize(true);
+          return;
+        }
+        setMessage("已取消：未授权读取正文，总结未执行。");
+      } else {
+        setMessage(apiErr.message);
+      }
     } finally {
       setBusy("");
     }
@@ -90,26 +112,7 @@ export default function FilesPage() {
     try {
       const data = await api.findDuplicates(workspace.scanId);
       setDupGroups(data.groups);
-    } catch (err) {
-      setMessage((err as Error).message);
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function doUndo() {
-    if (!undoChoice) return;
-    setBusy("undo");
-    setMessage("");
-    try {
-      const result = await api.undo(undoChoice);
-      setMessage(
-        result.status === "undone"
-          ? `已全部撤销（${result.operations.length} 项）`
-          : `部分撤销：${result.operations.filter((o) => o.status === "undone").length}/${result.operations.length} 项成功，冲突项已保留现场`,
-      );
-      if (workspace.scanId) void workspace.refreshFiles(workspace.scanId);
-      void refreshHistory();
+      setDupScope({ checked: data.checked, skipped: data.skipped });
     } catch (err) {
       setMessage((err as Error).message);
     } finally {
@@ -121,15 +124,33 @@ export default function FilesPage() {
     <div className="h-full overflow-y-auto px-8 py-6">
       <h1 className="text-xl font-bold">文件库</h1>
       <p className="mt-1 text-xs text-neutral-500">
-        已索引 {workspace.fileCount} 个文件（仅当前授权目录的扫描结果，不做后台全盘索引）
+        已加载 {workspace.fileCount} 个文件
+        {workspace.hasMore && (
+          <span className="text-amber-600"> · 还有更多文件未加载（可点击重新扫描）</span>
+        )}
+        {workspace.skippedDirectories.length > 0 && (
+          <span className="text-amber-600">
+            {" "}
+            · 跳过目录：{workspace.skippedDirectories.join("、")}（权限不足或规则跳过）
+          </span>
+        )}
       </p>
 
-      <input
-        className="mt-4 w-full max-w-md rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
-        placeholder="搜索文件名，例如：postman、笔记、pdf"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
+      <div className="mt-3 flex items-center gap-2">
+        <input
+          className="w-full max-w-md rounded border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none"
+          placeholder="搜索文件名，例如：postman、笔记、pdf"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button
+          className="rounded border border-neutral-300 px-3 py-2 text-xs disabled:opacity-50"
+          disabled={busy !== ""}
+          onClick={rescan}
+        >
+          {busy === "rescan" ? "重新扫描中…" : "↻ 重新扫描"}
+        </button>
+      </div>
 
       <div className="mt-4 overflow-hidden rounded border border-neutral-200">
         <table className="w-full text-left text-sm">
@@ -155,9 +176,7 @@ export default function FilesPage() {
                 }}
               >
                 <td className="px-3 py-1.5 font-mono text-xs">{f.path}</td>
-                <td className="px-3 py-1.5 text-xs text-neutral-500">
-                  .{f.extension || "-"}
-                </td>
+                <td className="px-3 py-1.5 text-xs text-neutral-500">.{f.extension || "-"}</td>
                 <td className="px-3 py-1.5 text-xs text-neutral-500">{formatSize(f.size)}</td>
                 <td className="px-3 py-1.5 text-xs text-neutral-500">
                   {formatEpoch(f.modified_ns / 1e9)}
@@ -190,11 +209,12 @@ export default function FilesPage() {
             <button
               className="rounded bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
               disabled={busy !== ""}
-              onClick={doSummarize}
+              onClick={() => doSummarize(false)}
             >
-              📄 让 SORTA 总结此文件
+              {busy === "summarize" ? "总结中…" : "📄 让 SORTA 总结此文件"}
             </button>
           </div>
+          {notice && <p className="mt-2 text-xs text-neutral-500">{notice}</p>}
           {preview && (
             <div className="mt-3">
               {preview.status === "ok" ? (
@@ -207,7 +227,7 @@ export default function FilesPage() {
             </div>
           )}
           {summary && (
-            <div className="mt-3 rounded bg-blue-50 px-3 py-2 text-xs text-blue-800 whitespace-pre-wrap">
+            <div className="mt-3 whitespace-pre-wrap rounded bg-blue-50 px-3 py-2 text-xs text-blue-800">
               {summary}
             </div>
           )}
@@ -226,15 +246,22 @@ export default function FilesPage() {
         >
           {busy === "dup" ? "比对中…" : "✨ 查找重复文件"}
         </button>
-        {dupGroups !== null && (
+        {dupGroups !== null && dupScope !== null && (
           <div className="mt-3 space-y-1 text-xs">
             {dupGroups.length === 0 ? (
-              <p className="text-neutral-500">未发现重复文件。</p>
+              <p className="text-neutral-500">
+                在已检查的 {dupScope.checked} 个文件中未发现重复
+                {dupScope.skipped > 0 &&
+                  `（跳过 ${dupScope.skipped} 个无法读取或超过大小上限的文件）`}
+                。
+              </p>
             ) : (
               <>
                 <p className="text-neutral-700">
                   发现 {dupGroups.length} 组重复文件（共{" "}
-                  {dupGroups.reduce((n, g) => n + g.length, 0)} 个，内容完全相同）：
+                  {dupGroups.reduce((n, g) => n + g.length, 0)} 个，内容完全相同）——
+                  已检查 {dupScope.checked} 个
+                  {dupScope.skipped > 0 && `，跳过 ${dupScope.skipped} 个`}：
                 </p>
                 {dupGroups.map((group, i) => (
                   <p key={i}>
@@ -255,59 +282,6 @@ export default function FilesPage() {
       {message && (
         <div className="mt-4 max-w-3xl rounded bg-neutral-100 px-3 py-2 text-xs">{message}</div>
       )}
-
-      <div className="mt-6 max-w-3xl rounded border border-neutral-200 p-4">
-        <h2 className="text-sm font-bold">执行历史与撤销</h2>
-        {history.length === 0 ? (
-          <p className="mt-1 text-xs text-neutral-500">暂无执行历史。</p>
-        ) : (
-          <>
-            <table className="mt-2 w-full text-left text-xs">
-              <thead className="text-neutral-500">
-                <tr>
-                  <th className="py-1 font-medium">批次</th>
-                  <th className="py-1 font-medium">状态</th>
-                  <th className="py-1 font-medium">开始</th>
-                  <th className="py-1 font-medium">结束</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((e) => (
-                  <tr key={e.execution_id} className="border-t border-neutral-100">
-                    <td className="py-1 font-mono">{e.execution_id}</td>
-                    <td className="py-1">{e.status}</td>
-                    <td className="py-1 text-neutral-500">{formatEpoch(e.started_at)}</td>
-                    <td className="py-1 text-neutral-500">{formatEpoch(e.finished_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="mt-2 flex gap-2">
-              <select
-                className="flex-1 rounded border border-neutral-300 px-2 py-1.5 text-xs"
-                value={undoChoice ?? ""}
-                onChange={(e) => setUndoChoice(e.target.value || null)}
-              >
-                <option value="">选择要撤销的批次…</option>
-                {history
-                  .filter((e) => e.status === "completed" || e.status === "partial_failed")
-                  .map((e) => (
-                    <option key={e.execution_id} value={e.execution_id}>
-                      {e.execution_id}（{e.status}）
-                    </option>
-                  ))}
-              </select>
-              <button
-                className="rounded border border-neutral-300 px-3 py-1.5 text-xs disabled:opacity-50"
-                disabled={!undoChoice || busy !== ""}
-                onClick={doUndo}
-              >
-                撤销该批次
-              </button>
-            </div>
-          </>
-        )}
-      </div>
     </div>
   );
 }

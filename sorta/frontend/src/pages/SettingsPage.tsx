@@ -114,6 +114,10 @@ export default function SettingsPage() {
         <div className="text-xs text-neutral-500">隐私模式（发送给云端模型的内容）</div>
         {[
           { value: "metadata_only", label: "仅元数据（不发送文件内容）" },
+          {
+            value: "ask_before_content",
+            label: "逐次确认（读取正文前逐项询问；未授权的文件只按文件名判断）",
+          },
           { value: "authorized_content", label: "授权读取内容（文件文本将发送给云端模型）" },
         ].map((option) => (
           <label key={option.value} className="mt-2 flex items-center gap-2 text-sm">
@@ -127,8 +131,9 @@ export default function SettingsPage() {
           </label>
         ))}
         <p className="mt-2 text-xs text-neutral-400">
-          metadata_only：只发送文件名与元数据；authorized_content：发送限长文本提取。
-          所有文件操作仅限该目录内，执行前必须经你确认。
+          metadata_only：只发送文件名与元数据；ask_before_content：规划中读取被拒的
+          文件将列入待确认，文件总结会在界面上向你请求单次授权；authorized_content：
+          发送限长文本提取。所有文件操作仅限该目录内，执行前必须经你确认。
         </p>
       </div>
 

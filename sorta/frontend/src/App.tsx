@@ -9,12 +9,15 @@ import {
 } from "./services/api";
 import ChatPage from "./pages/ChatPage";
 import FilesPage from "./pages/FilesPage";
+import HistoryPage from "./pages/HistoryPage";
 import SettingsPage from "./pages/SettingsPage";
 
 export interface WorkspaceState {
   scanId: string | null;
   root: string;
   fileCount: number;
+  hasMore: boolean;
+  skippedDirectories: string[];
   files: FileRow[];
   model: string;
   hasApiKey: boolean;
@@ -43,6 +46,8 @@ export default function App() {
     scanId: localStorage.getItem("sorta_scan_id"),
     root: localStorage.getItem("sorta_root") ?? "",
     fileCount: 0,
+    hasMore: false,
+    skippedDirectories: [],
     files: [],
     model: "",
     hasApiKey: false,
@@ -75,7 +80,13 @@ export default function App() {
   }, []);
 
   const setWorkspace = useCallback(
-    (info: { scan_id: string; root: string; file_count: number }) => {
+        (info: {
+          scan_id: string;
+          root: string;
+          file_count: number;
+          has_more?: boolean;
+          skipped_directories?: string[];
+        }) => {
       localStorage.setItem("sorta_scan_id", info.scan_id);
       localStorage.setItem("sorta_root", info.root);
       setState((s) => ({
@@ -83,6 +94,8 @@ export default function App() {
         scanId: info.scan_id,
         root: info.root,
         fileCount: info.file_count,
+        hasMore: info.has_more ?? false,
+        skippedDirectories: info.skipped_directories ?? [],
       }));
       void refreshFiles(info.scan_id);
     },
@@ -133,6 +146,7 @@ export default function App() {
             {[
               { to: "/", label: "对话", icon: "💬" },
               { to: "/files", label: "文件库", icon: "🗂️" },
+              { to: "/history", label: "历史", icon: "📜" },
               { to: "/settings", label: "设置", icon: "⚙️" },
             ].map((item) => (
               <NavLink
@@ -182,6 +196,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<ChatPage />} />
               <Route path="/files" element={<FilesPage />} />
+              <Route path="/history" element={<HistoryPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>
           )}

@@ -138,8 +138,9 @@ def test_approve_execute_undo_roundtrip(service_env):
 
 def test_duplicate_detection_and_preview(service_env):
     info = service_env.service.create_workspace(str(service_env.root))
-    groups = service_env.service.find_duplicates(info.scan_id)
-    assert groups == [["dup1.bin", "dup2.bin"]]
+    result = service_env.service.find_duplicates(info.scan_id)
+    assert result["groups"] == [["dup1.bin", "dup2.bin"]]
+    assert result["checked"] == 4 and result["skipped"] == 0  # 全部可读
 
     rows = service_env.service.list_files(info.scan_id, query="a.txt")
     preview = service_env.service.file_preview(info.scan_id, rows[0]["file_id"])

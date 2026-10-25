@@ -28,7 +28,7 @@ class MockLLM:
         self.script = list(script)
         self.requests: list[dict] = []
 
-    def chat(self, *, model, messages, tools):
+    def chat(self, *, model, messages, tools=None):
         self.requests.append({"model": model, "messages": copy.deepcopy(messages), "tools": tools})
         if not self.script:
             raise AssertionError("MockLLM 脚本耗尽，循环未按预期收敛")

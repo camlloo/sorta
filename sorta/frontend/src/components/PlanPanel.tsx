@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { api, type ExecutionDetail, type PlanDetail } from "../services/api";
 
-/** 示意图 ⑥⑦：右侧执行计划面板（时间线 + 预览 + 编辑 + 确认/取消 + 撤销）。 */
+/** 示意图 ⑥⑦ + UX-02：右侧计划面板——时间线、原路径→新路径预览、
+ * 低置信度默认排除、编辑锁定确认、执行与撤销。 */
 
 interface Props {
   plan: PlanDetail;
@@ -19,7 +20,8 @@ export default function PlanPanel({
   onExecuted,
 }: Props) {
   const [editing, setEditing] = useState(false);
-  const [keep, setKeep] = useState<boolean[]>(plan.operations.map(() => true));
+  // UX-02：低置信度项默认排除，逐项勾选后才纳入
+  const [keep, setKeep] = useState<boolean[]>(plan.operations.map((o) => o.confidence !== "low"));
   const [dests, setDests] = useState<string[]>(plan.operations.map((o) => o.destination));
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -87,7 +89,7 @@ export default function PlanPanel({
       window.alert(
         result.status === "undone"
           ? `已全部撤销（${result.operations.length} 项）`
-          : "部分撤销：冲突项已保留现场，详见文件库执行历史",
+          : "部分撤销：冲突项已保留现场，详见历史页",
       );
     } catch (err) {
       setBusy("");
@@ -117,24 +119,27 @@ export default function PlanPanel({
 
       <hr className="my-4 border-neutral-200" />
       <div className="flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold">预览</h3>
+        <h3 className="text-sm font-semibold">预览（原路径 → 新路径）</h3>
         <span className="text-xs text-neutral-500">
-          v{plan.version} · {plan.operations.length} 项操作
+          v{plan.version} · {plan.operations.length} 项
         </span>
       </div>
-      <div className="mt-2 max-h-64 overflow-y-auto rounded border border-neutral-200">
+      <div className="mt-2 max-h-72 overflow-y-auto rounded border border-neutral-200">
         <table className="w-full text-left text-xs">
           <tbody>
             {plan.operations.map((op, i) => (
               <tr
                 key={`${op.source_id}-${i}`}
-                className="border-b border-neutral-100 last:border-0"
+                className={`border-b border-neutral-100 last:border-0 ${
+                  editing && !keep[i] ? "opacity-40" : ""
+                }`}
               >
                 <td className="px-2 py-1.5 align-top">
                   <input
                     type="checkbox"
                     checked={editing ? keep[i] : true}
                     disabled={!editing}
+                    title={op.confidence === "low" ? "低置信度操作，默认排除" : ""}
                     onChange={(e) => {
                       const next = [...keep];
                       next[i] = e.target.checked;
@@ -143,10 +148,15 @@ export default function PlanPanel({
                   />
                 </td>
                 <td className="px-2 py-1.5">
-                  <div className="font-mono">{op.destination}</div>
-                  <div className="mt-0.5 text-neutral-400">{op.reason}</div>
+                  <div className="font-mono">{op.source}</div>
+                  <div className="font-mono text-neutral-700">→ {op.destination}</div>
                   <div className="mt-0.5 text-neutral-400">
                     [{op.action}/{op.confidence}]
+                    {op.confidence === "low" && (
+                      <span className="ml-1 rounded bg-amber-100 px-1 text-amber-700">
+                        低置信度（默认不执行）
+                      </span>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -157,10 +167,12 @@ export default function PlanPanel({
 
       {editing ? (
         <div className="mt-2 space-y-1">
+          <p className="text-xs text-neutral-500">修改目标路径（每行对应一项操作）：</p>
           {plan.operations.map((op, i) => (
             <input
               key={`${op.source_id}-input-${i}`}
-              className="w-full rounded border border-neutral-300 px-2 py-1 text-xs"
+              className="w-full rounded border border-neutral-300 px-2 py-1 text-xs disabled:opacity-40"
+              disabled={!keep[i]}
               value={dests[i]}
               onChange={(e) => {
                 const next = [...dests];
@@ -190,30 +202,24 @@ export default function PlanPanel({
           <button
             className="mt-2 text-left text-xs text-neutral-500 hover:text-neutral-800"
             onClick={() => {
-              setKeep(plan.operations.map(() => true));
+              setKeep(plan.operations.map((o) => o.confidence !== "low"));
               setDests(plan.operations.map((o) => o.destination));
               setEditing(true);
             }}
           >
-            编辑计划（勾选剔除 / 修改目标路径）
+            编辑计划（可剔除操作 / 修改目标路径；低置信度默认排除）
           </button>
         )
       )}
 
       {errors.map((issue, i) => (
-        <div
-          key={`e-${i}`}
-          className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700"
-        >
+        <div key={`e-${i}`} className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">
           {issue.operation_index !== null && `操作#${issue.operation_index} `}
           {issue.code}: {issue.message}
         </div>
       ))}
       {warnings.map((issue, i) => (
-        <div
-          key={`w-${i}`}
-          className="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-700"
-        >
+        <div key={`w-${i}`} className="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-700">
           {issue.operation_index !== null && `操作#${issue.operation_index} `}
           {issue.code}: {issue.message}
         </div>
@@ -231,6 +237,12 @@ export default function PlanPanel({
 
       {error && (
         <div className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>
+      )}
+
+      {editing && !executed && (
+        <p className="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          存在未保存的编辑：请先「保存编辑」或「放弃编辑」，再确认执行。
+        </p>
       )}
 
       {execution ? (
@@ -262,14 +274,19 @@ export default function PlanPanel({
         <div className="mt-auto grid grid-cols-2 gap-2 pt-4">
           <button
             className="rounded bg-neutral-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
-            disabled={plan.has_errors || plan.operations.length === 0 || busy !== ""}
+            disabled={
+              plan.has_errors ||
+              plan.operations.length === 0 ||
+              busy !== "" ||
+              editing // UX-02：未保存编辑时禁止确认
+            }
             onClick={run}
           >
             {busy === "approve" || busy === "execute" ? "执行中…" : "▶ 确认并执行"}
           </button>
           <button
             className="rounded border border-neutral-300 px-3 py-2 text-sm disabled:opacity-40"
-            disabled={busy !== ""}
+            disabled={busy !== "" || editing}
             onClick={cancel}
           >
             ↩ 取消

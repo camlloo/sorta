@@ -100,6 +100,12 @@ class UndoConflictError(SortaError):
     code = "UNDO_CONFLICT"
 
 
+class ConsentRequiredError(SortaError):
+    """需要用户授权读取文件正文（v2 改进文档 UX-03）。"""
+
+    code = "CONSENT_REQUIRED"
+
+
 class ModelUnavailableError(SortaError):
     """模型接口不可用或未配置（v2 API §4.5）。"""
 

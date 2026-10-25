@@ -7,6 +7,8 @@
 > **目标平台**：Windows 10/11 x64 优先；macOS、Linux 后续适配  
 > **开发理念**：Local-first / 最小授权 / 先计划后执行 / 可审计 / 有条件撤销 / 不引入 Agent 框架
 
+> **2026-10-25 修订**：应用户决策，Streamlit UI 已移除，不再作为迁移期界面或回归入口保留。前端统一采用 React + TypeScript + Vite + Tailwind CSS，通过 FastAPI 访问业务服务；CLI 保留。`uv run sorta ui` 启动本地 Web 界面。下文关于旧 Streamlit 的描述仅用于说明历史架构。
+
 ---
 
 ## 0. 阅读说明与项目基线
@@ -24,7 +26,7 @@
 - 所有操作必须按照 `ExecutionPlan → Validation → 用户审批 → Executor` 执行。
 - `plan_hash` 与审批版本严格绑定，文件发生变化必须重新检查，不静默覆盖，操作日志支持条件式 Undo。
 - 文档解析内容为不可信输入；模型输出无权突破文件授权范围。
-- 保留 CLI，保留现有 Streamlit UI 作为迁移期可用版本/回归测试入口；桌面 UI 不是理由去重写核心业务。
+- 保留 CLI；Streamlit UI 已移除，React + FastAPI 为当前界面方案，回归验证通过 CLI、领域层/API 测试及 React 界面完成；桌面 UI 不是理由去重写核心业务。
 
 ### 0.3 本次变更范围
 
@@ -104,7 +106,7 @@ flowchart TD
 
 ### 3.1 迁移原则
 
-已有 Streamlit 代码可能直接调用 scanner、controller、executor 等对象。**不要把原有 `ui/app.py` 改成新的业务入口**；应将业务操作整理为 `Application Service`，让 CLI、Streamlit、FastAPI 都调用它。
+原 Streamlit UI 曾直接调用 scanner、controller、executor 等对象，现已移除。业务操作统一整理为 `Application Service`，由 CLI 和 FastAPI 共用，React 通过 API 访问；不再保留或恢复 `ui/app.py`。
 
 建议提供以下服务接口：
 
@@ -134,7 +136,7 @@ class SortaService:
 | `executor/*` | 完整保留 | API 提供执行状态/冲突/撤销入口 |
 | `storage/*` | 迁移复用 | 增加数据库连接生命周期管理 |
 | `cli.py` | 保留 | 改为调用统一服务层（若尚未如此） |
-| `ui/app.py` (Streamlit) | 保留 | 新增独立 React 前端，不就地覆盖 |
+| `ui/app.py` (Streamlit) | 已移除 | 界面统一由 React + FastAPI 承担，不作为迁移期或回归入口保留 |
 | 无 | 新增 | `sorta/application/`、`sorta/api/`、`desktop/` |
 
 ### 3.3 数据库迁移约束
@@ -404,7 +406,6 @@ sorta/                          # 现有 Python 项目根目录
 │   │   ├── routes/
 │   │   ├── dependencies.py
 │   │   └── errors.py
-│   ├── ui/app.py               # 旧 Streamlit 保留
 │   └── cli.py                  # 旧 CLI 保留
 ├── frontend/                   # 新增：React + Vite
 │   ├── package.json
@@ -445,18 +446,18 @@ sorta/                          # 现有 Python 项目根目录
 - [ ] 运行 `uv run sorta ui`；确认当前界面行为。
 - [ ] 运行 `scan → plan → inspect-plan → apply → history → undo` 冒烟测试。
 - [ ] 复制测试数据库与 fixture，确认无真实下载目录操作。
-- [ ] 给可工作的基线打 Git tag，例如 `sorta-streamlit-baseline`。
+- [ ] 给可工作的基线打 Git tag，例如 `sorta-web-baseline`。
 
 **交付**：`docs/BASELINE.md`、运行截图、测试报告。若仓库现实与原文档不一致，以仓库为准修订文档。
 
 ### D1 — 领域服务层抽离
 
-- [ ] 让 CLI/Streamlit 不再直接掌握分散的核心流程。
+- [ ] 让 CLI 和 FastAPI 通过统一服务层编排核心流程；React 通过 API 调用。
 - [ ] 新增 `SortaService` 与共享 DTO/Pydantic Schema。
 - [ ] 确保审批、执行与 Undo 都通过相同入口。
 - [ ] 运行原有所有测试；补齐 Service 层隔离测试。
 
-**验收**：CLI 和 Streamlit 行为不变；未新增任何 Agent 写权限。
+**验收**：CLI 行为不变，FastAPI 与 React 复用同一业务服务层；未新增任何 Agent 写权限，不要求恢复 Streamlit。
 
 ### D2 — FastAPI 服务
 
@@ -558,7 +559,7 @@ sorta/                          # 现有 Python 项目根目录
 > **先做 D0 + D1，不创建 Tauri 空壳。**
 
 1. 打开现有项目仓库并运行原测试套件，记录实际模块名和可用功能。
-2. 将原 Streamlit UI 直接调用的核心动作抽取为 `SortaService`，不改变 `AgentController`、`PlanValidator` 或 `Executor` 的业务结果。
+2. 核对 `SortaService` 已承接原界面的核心动作，CLI 与 FastAPI 共用该服务；不恢复 Streamlit，不改变 `AgentController`、`PlanValidator` 或 `Executor` 的业务结果。
 3. 给 `SortaService` 编写端到端测试，确保仍保留计划哈希/用户审批/撤销功能。
 4. 在此基础上添加 FastAPI 最小健康检查与一个只读扫描接口，再继续扩展完整 API。
 

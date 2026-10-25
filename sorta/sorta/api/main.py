@@ -80,7 +80,19 @@ def create_app(
     dist_env = os.environ.get("SORTA_FRONTEND_DIST", "")
     dist = Path(dist_env) if dist_env else _FRONTEND_DIST
     if dist.exists():
-        app.mount("/", StaticFiles(directory=str(dist), html=True), name="frontend")
+        assets = dist / "assets"
+        if assets.exists():
+            app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
+
+        from fastapi.responses import FileResponse
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa_fallback(full_path: str) -> FileResponse:
+            """SPA 回退：非 API 路径一律返回 index.html（React Router 接管）。"""
+            candidate = (dist / full_path).resolve()
+            if full_path and candidate.is_file() and candidate.is_relative_to(dist.resolve()):
+                return FileResponse(candidate)
+            return FileResponse(dist / "index.html")
     return app
 
 

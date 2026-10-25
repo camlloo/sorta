@@ -114,6 +114,25 @@ def create_workspace(body: WorkspaceRequest, request: Request) -> dict:
         "file_count": info.file_count,
         "created_at": info.created_at,
         "expires_at": info.expires_at,
+        "has_more": info.has_more,
+        "next_cursor": info.next_cursor,
+        "skipped_directories": info.skipped_directories or [],
+    }
+
+
+@workspaces_router.post("/api/v1/scans/{scan_id}/rescan")
+def rescan_workspace(scan_id: str, request: Request) -> dict:
+    """对既有工作区重新扫描：新快照用于浏览，旧计划/日志依据不变（UX-04）。"""
+    info = request.app.state.service.rescan(scan_id)
+    return {
+        "scan_id": info.scan_id,
+        "root": info.root,
+        "file_count": info.file_count,
+        "created_at": info.created_at,
+        "expires_at": info.expires_at,
+        "has_more": info.has_more,
+        "next_cursor": info.next_cursor,
+        "skipped_directories": info.skipped_directories or [],
     }
 
 
@@ -129,19 +148,29 @@ def file_preview(scan_id: str, file_id: str, request: Request) -> dict:
     return outcome.model_dump()
 
 
+class SummaryRequest(BaseModel):
+    confirm_content_access: bool = False
+
+
 @workspaces_router.post("/api/v1/scans/{scan_id}/files/{file_id}/summary")
-def file_summary(scan_id: str, file_id: str, request: Request) -> dict:
+def file_summary(
+    scan_id: str, file_id: str, request: Request, body: SummaryRequest | None = None
+) -> dict:
+    confirm = bool(body.confirm_content_access) if body else False
     model, llm = make_llm(request)
     summary = request.app.state.service.summarize_file(
-        scan_id, file_id, llm=llm, model=model
+        scan_id,
+        file_id,
+        llm=llm,
+        model=model,
+        confirm_content_access=confirm,
     )
     return {"summary": summary}
 
 
 @workspaces_router.post("/api/v1/scans/{scan_id}/duplicates")
 def find_duplicates(scan_id: str, request: Request) -> dict:
-    groups = request.app.state.service.find_duplicates(scan_id)
-    return {"groups": groups}
+    return request.app.state.service.find_duplicates(scan_id)
 
 
 # ---- 计划与 Job（示意图 ⑥ 执行计划面板） --------------------------------------
@@ -233,6 +262,38 @@ def approve_plan(plan_id: int, body: ApproveRequest, request: Request) -> dict:
         expected_version=body.expected_version,
         expected_plan_hash=body.expected_plan_hash,
     )
+
+
+class PlanRevisionRequest(BaseModel):
+    instruction: str = Field(min_length=1)
+    expected_version: int
+
+
+@plans_router.post("/api/v1/plans/{plan_id}/revisions")
+def revise_plan(plan_id: int, body: PlanRevisionRequest, request: Request) -> dict:
+    """自然语言修改当前计划（UX-01）：返回 job_id，轮询获取新版本。"""
+    model, llm = make_llm(request)
+    service = request.app.state.service
+    jobs = request.app.state.jobs
+
+    def _run(job_id: str, cancel_event) -> dict:
+        detail = service.revise_plan(
+            plan_id,
+            body.instruction,
+            model=model,
+            llm=llm,
+            expected_version=body.expected_version,
+        )
+        del job_id, cancel_event
+        return {
+            "plan_id": detail.plan_id,
+            "scan_id": detail.scan_id,
+            "version": detail.version,
+            "plan_hash": detail.plan_hash,
+        }
+
+    job_id = jobs.submit("plan-revision", _run)
+    return {"job_id": job_id}
 
 
 @plans_router.post("/api/v1/plans/{plan_id}/reject")

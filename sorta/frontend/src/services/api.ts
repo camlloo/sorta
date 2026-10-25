@@ -24,6 +24,9 @@ export interface WorkspaceInfo {
   file_count: number;
   created_at: number;
   expires_at: number;
+  has_more: boolean;
+  next_cursor: string | null;
+  skipped_directories: string[];
 }
 
 export interface Issue {
@@ -35,6 +38,7 @@ export interface Issue {
 
 export interface PlanOperation {
   source_id: string;
+  source: string;
   destination: string;
   action: "move" | "copy";
   confidence: "high" | "medium" | "low";
@@ -163,12 +167,23 @@ export const api = {
       `/api/v1/scans/${scanId}/files/${fileId}/preview`,
       { method: "POST" },
     ),
-  summarizeFile: (scanId: string, fileId: string) =>
+  summarizeFile: (scanId: string, fileId: string, confirmContentAccess = false) =>
     request<{ summary: string }>(`/api/v1/scans/${scanId}/files/${fileId}/summary`, {
       method: "POST",
+      body: JSON.stringify({ confirm_content_access: confirmContentAccess }),
     }),
   findDuplicates: (scanId: string) =>
-    request<{ groups: string[][] }>(`/api/v1/scans/${scanId}/duplicates`, { method: "POST" }),
+    request<{ groups: string[][]; checked: number; skipped: number }>(
+      `/api/v1/scans/${scanId}/duplicates`,
+      { method: "POST" },
+    ),
+  rescanWorkspace: (scanId: string) =>
+    request<WorkspaceInfo>(`/api/v1/scans/${scanId}/rescan`, { method: "POST" }),
+  revisePlan: (planId: number, instruction: string, expectedVersion: number) =>
+    request<{ job_id: string }>(`/api/v1/plans/${planId}/revisions`, {
+      method: "POST",
+      body: JSON.stringify({ instruction, expected_version: expectedVersion }),
+    }),
   createPlan: (scanId: string, requestText: string, privacy: string) =>
     request<{ job_id: string }>("/api/v1/plans", {
       method: "POST",
@@ -200,6 +215,8 @@ export const api = {
     }),
   undo: (executionId: string) =>
     request<ExecutionDetail>(`/api/v1/executions/${executionId}/undo`, { method: "POST" }),
+  getExecution: (executionId: string) =>
+    request<ExecutionDetail>(`/api/v1/executions/${executionId}`),
   history: () => request<{ executions: HistoryEntry[] }>("/api/v1/history"),
   getSettings: () => request<Settings>("/api/v1/settings"),
   saveSettings: (body: {
