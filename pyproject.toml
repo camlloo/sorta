@@ -1,7 +1,7 @@
 [project]
 name = "sorta"
 version = "0.1.0"
-description = "SORTA — 本地优先、自然语言驱动的 AI 文件整理助手（M1：只读扫描与注册）"
+description = "SORTA — 本地优先、自然语言驱动、可预览和撤销的 AI 文件整理助手"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

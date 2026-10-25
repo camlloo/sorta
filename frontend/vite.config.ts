@@ -6,17 +6,12 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    host: "127.0.0.1",
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8502",
+        target: process.env.SORTA_API_URL || "http://127.0.0.1:8502",
         changeOrigin: true,
-        // 开发代理自动携带后端会话 token（生产为同源，无需代理）
-        configure: (proxy) => {
-          proxy.on("proxyReq", (proxyReq) => {
-            const token = sessionStorage.getItem("sorta_token") ?? "";
-            if (token) proxyReq.setHeader("X-SORTA-Token", token);
-          });
-        },
+        // 浏览器 API 客户端携带会话 token；代理直接转发请求头。
       },
     },
   },

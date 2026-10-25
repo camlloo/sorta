@@ -10,9 +10,11 @@ build/
 .pytest_cache/
 .ruff_cache/
 
-# 本地配置与数据库（绝不提交真实密钥，见开发文档 §12.2）
-.env
+# 本地配置与数据库
+.env*
+!.env.example
 *.db
+*.db-*
 
 # plan 命令的本地生成输出（可能包含真实目录的文件路径，不提交）
 plan.json
