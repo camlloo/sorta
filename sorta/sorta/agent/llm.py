@@ -45,10 +45,24 @@ class OpenAICompatClient:
     tools=None 时为普通对话调用（如文件内容总结），不携带工具清单。
     """
 
-    def __init__(self, *, api_key: str, base_url: str | None = None, timeout: float = 120.0):
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str | None = None,
+        timeout: float = 60.0,
+        max_retries: int = 1,
+    ):
         from openai import OpenAI  # 延迟导入：Mock 测试无需安装/初始化 SDK
 
-        self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+        # 网络瞬断时快速失败（60s 超时 + 1 次重试 ≈ 最多 2 分钟），
+        # 而不是让界面"正在调查"挂几分钟——失败可立即重试
+        self._client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
         self.total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "requests": 0}
 
     def chat(
